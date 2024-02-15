@@ -14,9 +14,10 @@ pub struct Parser {
     current: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Expr {
     Binary(Box<Expr>, Token, Box<Expr>),
+    Call(Box<Expr>, Token, Vec<Expr>),
     Unary(Token, Box<Expr>),
     Literal(Object),
     Logical(Box<Expr>, Token, Box<Expr>),
@@ -35,6 +36,7 @@ impl Expr {
             Expr::Grouping(expr) => visitor.visit_grouping(expr),
             Expr::Variable(name) => visitor.visit_variable(name),
             Expr::Assign(name, value) => visitor.visit_assign(name, value),
+            Expr::Call(callee, paren, args) => visitor.visit_call(callee, paren, args),
         }
     }
 }
@@ -49,11 +51,12 @@ impl std::fmt::Display for Expr {
             Expr::Grouping(expr) => write!(f, "Grouping({})", expr),
             Expr::Variable(name) => write!(f, "Variable({})", name),
             Expr::Assign(name, expr) => write!(f, "Assign({}, {})", name, expr),
+            Expr::Call(callee, paren, args) => write!(f, "Call({}({:?}))", callee, args),
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Stmt {
     Expression(Box<Expr>),
     Print(Box<Expr>),
@@ -61,6 +64,7 @@ pub enum Stmt {
     Block(Vec<Stmt>),
     If(Box<Expr>, Box<Stmt>, Option<Box<Stmt>>),
     While(Box<Expr>, Box<Stmt>),
+    Function(String, Vec<String>, Box<Stmt>),
 }
 
 impl std::fmt::Display for Stmt {
@@ -85,6 +89,9 @@ impl std::fmt::Display for Stmt {
             },
             Stmt::While(condition, body) => {
                 write!(f, "While({}, {}, ", condition, body)
+            },
+            Stmt::Function(name, args, body) => {
+                write!(f, "Fn:{}({:?})", name, args)
             }
         }
     }
@@ -99,6 +106,7 @@ impl Stmt {
             Stmt::Print(e) => visitor.visit_print(e),
             Stmt::Var(name, initializer) => visitor.visit_var(name, initializer),
             Stmt::Block(stmts) => visitor.visit_block(stmts),
+            Stmt::Function(name, params, body) => visitor.visit_function(name, params, body),
         }
     }
 }
@@ -171,7 +179,39 @@ impl Parser {
             return Ok(Box::new(Expr::Unary(op, right)))
         }
 
-        return self.primary()
+        return self.call()
+    }
+
+    fn call(&mut self) -> Result<Box<Expr>, String> {
+        let mut expr = self.primary();
+
+        while true { // Why are we doing this?
+            if self.expect_token_type_one_of(vec![Token::LEFT_PAREN]) {
+                expr = self.finish_call(expr?);
+            } else {
+                break;
+            }
+        }
+
+        return expr;
+    }
+
+    fn finish_call(&mut self, callee: Box<Expr>) -> Result<Box<Expr>, String> {
+        let mut args = vec![];
+
+        if !self.check(&Token::RIGHT_PAREN) {
+            args.push(*self.expression()?);
+
+            while self.expect_token_type_one_of(vec![Token::COMMA]) {
+                if args.len() >= 255 {
+                    return Err("Can't have more than 255 arguments.".to_string());
+                }
+                args.push(*self.expression()?);
+            }
+        }
+
+        let paren = self.consume(&Token::RIGHT_PAREN, format!(" Expect ')' after argument list."));
+        return Ok(Box::new(Expr::Call(callee, paren.unwrap().token.clone(), args)))
     }
 
     fn assignment(&mut self) -> Result<Box<Expr>, String> {
@@ -250,7 +290,7 @@ impl Parser {
             }
         }
 
-        println!("peek: {:?}", self.peek());
+        println!("primary did not generate; peek: {:?}", self.peek());
         println!("returning an empty nill");
 
         return Ok(Box::new(Expr::Literal(Object::Nil))) // TODO: is this an error?
@@ -344,7 +384,7 @@ impl Parser {
     
     fn expression_statement(&mut self) -> Result<Stmt, String> {
         let expr = self.expression()?;
-        self.consume(&Token::SEMICOLON, format!("Expect ';' after expression"))?;
+        self.consume(&Token::SEMICOLON, format!("Expect ';' after print-expression"))?;
 
         return Ok(Stmt::Expression(expr))
     }
@@ -367,7 +407,7 @@ impl Parser {
     fn for_statement(&mut self) -> Result<Stmt, String> {
         self.consume(&Token::LEFT_PAREN, format!("Expect '(' after 'for'."));
         let initializer = if self.check(&Token::SEMICOLON) {
-            None   
+            None
         } else if (self.expect_token_type_one_of(vec![Token::VAR])) {
             Some(self.var_declaration()?) // chased this being "self.assign" for way too long, how come Expr and Stmt fit in the same?
         } else {
@@ -431,9 +471,49 @@ impl Parser {
         return Ok(Stmt::Var(name, initializer.unwrap_or(Box::new(Expr::Literal(Object::Nil)))));
     }
 
+    fn function(&mut self, kind: String) -> Result<Stmt, String> {
+        let fn_name = {
+            let fn_name = self.consume(&Token::Identifier("".to_string()), format!("Expect {} name.", kind))?;
+            if let Token::Identifier(name) = fn_name.token.clone() {
+                name
+            } else {
+                "None".to_string() // todo: Option?
+            }
+        };
+
+        
+
+        let mut params = vec![];
+        self.consume(&Token::LEFT_PAREN, format!("Expect '(' before {} name", kind));
+
+        if !self.check(&Token::RIGHT_BRACE) {
+            println!("{:?}", self.peek());
+            let tloc: &TokenLoc = self.consume(&Token::Identifier("".to_string()), "1st Expect parameter name".to_string())?;
+            if let Token::Identifier(name) = tloc.token.clone() {
+                params.push(name);
+            }
+
+            while self.expect_token_type_one_of(vec![Token::COMMA]) {
+                let tloc: &TokenLoc = self.consume(&Token::Identifier("".to_string()), "2nd Expect parameter name".to_string())?;
+                if let Token::Identifier(name) = tloc.token.clone() {
+                    params.push(name);
+                }    
+            }
+        }
+
+        self.consume(&Token::RIGHT_PAREN, format!("Expect ')' after {} parameters", kind));
+        self.consume(&Token::LEFT_BRACE, format!("Expect '{{' before {} body", kind));
+        let body = self.block()?;
+
+        return Ok(Stmt::Function(fn_name, params, Box::new(body)))
+    }
+
     fn declaration(&mut self) -> Result<Stmt, String> {
         if self.expect_token_type_one_of(vec![Token::VAR]) {
             self.var_declaration()
+        } else if self.expect_token_type_one_of(vec![Token::FUN]) {
+            println!("Function!!");
+            self.function(format!("function"))
         } else {
             self.statement()
         }

@@ -14,16 +14,28 @@ use crate::scanner::*;
 use crate::parser::*;
 
 struct Lox {
-    had_error: bool
+    had_error: bool,
+    interpreter: Interpreter,
 }
 
 impl Lox {
+    pub fn new() -> Self {
+        Lox {
+            had_error: false,
+            interpreter: Interpreter::new()
+        }
+    }
+
     fn error(line: i32, message: &str) {
         Lox::report(line, &"", message)
     }
 
     fn report(line: i32, loc: &str, msg: &str) {
         println!("[line {}] Error {}: {}", line, loc, msg)
+    }
+
+    fn run_stmts(&mut self, stmts: Vec<Stmt>) {
+        self.interpreter.interpret(stmts)
     }
 
     fn run(&mut self, source: String) { 
@@ -39,8 +51,7 @@ impl Lox {
                 let mut printer = AstPrinter {};
                 printer.print(&stmts);
 
-                let mut interpreter = Interpreter::new();
-                interpreter.interpret(stmts)
+                self.interpreter.interpret(stmts)
                 //println!("{:?}", stmts.visit(&mut interpreter));
                 
             },
@@ -51,10 +62,14 @@ impl Lox {
 
 fn main() {
 
-    let path = "examples/for_loop.lox";
-    let mut lox = Lox { had_error: false };
+    let path = "examples/fn.lox";
+    let mut lox = Lox::new();
 
-    match std::fs::read_to_string(path) {
+   /*  lox.run_stmts(vec![
+        Stmt::Print(Box::new(Expr::Literal(Object::String("Hello world!".to_string()))))
+    ]); */
+
+   match std::fs::read_to_string(path) {
         Ok(script) => {
             println!("running script:\n{}\n=======================================", &script);
             lox.run(script);
@@ -68,8 +83,5 @@ fn main() {
     }
 
     // todo: exit 64 if it's not fed a file
-
-
-    
     
 }

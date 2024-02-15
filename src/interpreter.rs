@@ -7,16 +7,40 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-
 use crate::scanner::*;
 use crate::parser::*;
 
+
+#[derive(Debug, Clone)]
+pub struct LoxFunction { // this should contain the declaration
+    name: Option<String>,
+    declaration: Vec<Stmt>,
+    // does this thing need its own environment/closure?
+    is_method: bool,
+}
+
+impl LoxFunction {
+    pub fn invoke(&self, interpreter: &mut Interpreter, args: Vec<Object>) {
+        interpreter.execute_block(&self.declaration, interpreter.env.clone()) // TODO: correct environment
+    }
+}
+
+impl LoxFunction {
+    pub fn new(name: Option<String>, body: &Vec<Stmt>) -> Self {
+        LoxFunction {
+            name: name,
+            declaration: body.clone(),
+            is_method: false,
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Object {
     String(String),
     Number(f64),
     Boolean(bool),
+    Callable(LoxFunction),
     Nil,
 }
 
@@ -26,7 +50,17 @@ impl std::fmt::Display for Object {
             Object::String(s) => write!(f, "'{}'", s),
             Object::Number(n) => write!(f, "{}", n),
             Object::Boolean(b) => write!(f, "{}", b),
+            Object::Callable(func) => write!(f, "{}", func),
             Object::Nil => write!(f, "nil"),
+        }
+    }
+}
+
+impl std::fmt::Display for LoxFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.name {
+            Some(name) => write!(f, "Function: {}, is_method: {}, declaration: {:?}", name, self.is_method, self.declaration),
+            None => write!(f, "Anonymous Function, is_method: {}, declaration: {:?}", self.is_method, self.declaration),
         }
     }
 }
@@ -40,6 +74,7 @@ pub trait ExprVisitor<T> {
     fn visit_variable(&mut self, name: &String) -> T; // TODO: I don't want to copy variables on every use.
                                                       // this may mean wrapping them in RCs?  Do we even need ExprVisitor to be generic?,
     fn visit_assign(&mut self, name: &String, value: &Expr) -> T;
+    fn visit_call(&mut self, callee: &Box<Expr>, paren: &Token, args: &Vec<Expr>) -> T;
 }
 
 pub trait StmtVisitor { // statements produce no values
@@ -49,6 +84,7 @@ pub trait StmtVisitor { // statements produce no values
     fn visit_while(&mut self, condition: &Box<Expr>, body: &Box<Stmt>);
     fn visit_var(&mut self, name: &String, initializer: &Box<Expr>);
     fn visit_block(&mut self, stmts: &Vec<Stmt>);
+    fn visit_function(&mut self, name: &String, params: &Vec<String>, body: &Box<Stmt>);
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +184,16 @@ impl ExprVisitor<String> for AstPrinter {
     fn visit_assign(&mut self, name: &String, value: &Expr) -> String {
         self.parenthesize(format!("assign {}", name), &[value])
     }
+
+    fn visit_call(&mut self, callee: &Box<Expr>, paren: &Token, args: &Vec<Expr>) -> String {
+        let args : Vec<_> = args.iter().collect();
+        if let Expr::Call(callee, paren, args) = (*callee.clone()) {
+
+        };
+
+        let c = callee.visit(self);
+        self.parenthesize(format!("call {}", c), &args)
+    }
 }
 
 impl StmtVisitor for AstPrinter {
@@ -175,6 +221,10 @@ impl StmtVisitor for AstPrinter {
 
     fn visit_while(&mut self, condition: &Box<Expr>, body: &Box<Stmt>) {
         condition.visit(self);
+    }
+
+    fn visit_function(&mut self, name: &String, params: &Vec<String>, body: &Box<Stmt>) {
+        body.visit(self);
     }
 }
 
@@ -208,6 +258,8 @@ pub struct Interpreter {
 
 impl Interpreter {
     pub fn new() -> Self {
+        let env = Environment::new();
+        //env.define("clock", Object::Callable());
         Interpreter {
             env: Rc::new(RefCell::new(Environment::new()))
         }
@@ -332,6 +384,21 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
             _ => Err(format!("did not assign variable {}", name))
         }
     }
+
+    fn visit_call(&mut self, callee: &Box<Expr>, paren: &Token, args: &Vec<Expr>) -> Result<Object, String> {
+        let callee = self.evaluate(callee)?;
+        let args : Result<Vec<Object>, String> = args.iter().map(|a| self.evaluate(a)).collect();
+
+        if let Object::Callable(funct) = callee {
+            funct.invoke(self, args.unwrap());
+            return Ok(Object::Nil);
+        } else {
+            return Err(format!("invalid function call: callee is not callable"));
+        }
+        
+
+        //return Ok(Object::String(format!("fn '{:?}' with {:?} was called, but function calls are not implemented yet :3", callee, args)));
+    }
 }
 
 impl StmtVisitor for Interpreter {
@@ -370,5 +437,10 @@ impl StmtVisitor for Interpreter {
         while Self::is_truthy(&self.evaluate(&condition).unwrap()) { // TODO: error handling
             self.execute(body);
         }
+    }
+
+    fn visit_function(&mut self, name: &String, params: &Vec<String>, body: &Box<Stmt>) {
+        let func = LoxFunction::new(Some(name.clone()), &vec![*body.clone()]);
+        self.env.borrow_mut().define(name.clone(), Object::Callable(func));
     }
 }

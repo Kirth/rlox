@@ -1,0 +1,6 @@
+fun plusOne(a) {
+    print a + 1;
+}
+
+plusOne(3);
+plusOne("1");
