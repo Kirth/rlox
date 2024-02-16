@@ -14,21 +14,30 @@ use crate::parser::*;
 #[derive(Debug, Clone)]
 pub struct LoxFunction { // this should contain the declaration
     name: Option<String>,
-    declaration: Vec<Stmt>,
+    declaration: Box<Stmt>,
+    params: Vec<String>,
     // does this thing need its own environment/closure?
     is_method: bool,
 }
 
 impl LoxFunction {
     pub fn invoke(&self, interpreter: &mut Interpreter, args: Vec<Object>) {
-        interpreter.execute_block(&self.declaration, interpreter.env.clone()) // TODO: correct environment
+        let env = Environment::with_enclosing(interpreter.env.clone());
+
+        for (k, v) in self.params.iter().zip(args.iter()) {
+            let _ = env.borrow_mut().define(k.clone(), v.clone());
+        }
+
+        interpreter.execute_block(&vec![*self.declaration.clone()], env) // TODO: correct environment
     }
 }
 
 impl LoxFunction {
-    pub fn new(name: Option<String>, body: &Vec<Stmt>) -> Self {
+    pub fn new(name: Option<String>, params: &Vec<String>, body: &Box<Stmt>) -> Self {
+        println!("new loxfunction");
         LoxFunction {
             name: name,
+            params: params.clone(),
             declaration: body.clone(),
             is_method: false,
         }
@@ -259,7 +268,8 @@ pub struct Interpreter {
 impl Interpreter {
     pub fn new() -> Self {
         let env = Environment::new();
-        //env.define("clock", Object::Callable());
+        
+
         Interpreter {
             env: Rc::new(RefCell::new(Environment::new()))
         }
@@ -390,13 +400,12 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
         let args : Result<Vec<Object>, String> = args.iter().map(|a| self.evaluate(a)).collect();
 
         if let Object::Callable(funct) = callee {
+            println!("invoke");
             funct.invoke(self, args.unwrap());
             return Ok(Object::Nil);
         } else {
             return Err(format!("invalid function call: callee is not callable"));
         }
-        
-
         //return Ok(Object::String(format!("fn '{:?}' with {:?} was called, but function calls are not implemented yet :3", callee, args)));
     }
 }
@@ -440,7 +449,8 @@ impl StmtVisitor for Interpreter {
     }
 
     fn visit_function(&mut self, name: &String, params: &Vec<String>, body: &Box<Stmt>) {
-        let func = LoxFunction::new(Some(name.clone()), &vec![*body.clone()]);
+        println!("visit_function");
+        let func = LoxFunction::new(Some(name.clone()), params, body);
         self.env.borrow_mut().define(name.clone(), Object::Callable(func));
     }
 }

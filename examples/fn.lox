@@ -1,6 +1,16 @@
-fun plusOne(a) {
-    print a + 1;
+fun hello(name) {
+    print "Hello " + name + "!";
 }
 
-plusOne(3);
-plusOne("1");
+fun count(n) {
+    if (n > 1) {
+        count(n - 1);
+    }
+
+    print n;
+}
+
+hello("world");
+hello("Kirth");
+
+count(3);
