@@ -1,4 +1,4 @@
-#![allow(non_camel_case_types)]
+#![allow(non_camel_case_types, unused)]
 
 
 // In pass 1: I will not add any extra bells and whistles to Lox
@@ -65,6 +65,7 @@ pub enum Stmt {
     If(Box<Expr>, Box<Stmt>, Option<Box<Stmt>>),
     While(Box<Expr>, Box<Stmt>),
     Function(String, Vec<String>, Box<Stmt>),
+    Return(String, Box<Expr>), // keyword, value
 }
 
 impl std::fmt::Display for Stmt {
@@ -93,12 +94,15 @@ impl std::fmt::Display for Stmt {
             Stmt::Function(name, args, body) => {
                 write!(f, "Fn:{}({:?})", name, args)
             }
+            Stmt::Return(keyword, expr) => {
+                write!(f, "Return:{}({:?})", keyword, expr)
+            }
         }
     }
 }
 
 impl Stmt {
-    pub fn visit(&self, visitor: &mut dyn StmtVisitor) { // statements produce no values
+    pub fn visit(&self, visitor: &mut dyn StmtVisitor) -> Option<Object> { // statements produce no values
         match self {
             Stmt::Expression(e) => visitor.visit_expression(e), // todo: does it make sense to not peel this off here?
             Stmt::If(condition, if_stmt, else_stmt) => visitor.visit_if(condition, if_stmt, else_stmt),
@@ -107,6 +111,7 @@ impl Stmt {
             Stmt::Var(name, initializer) => visitor.visit_var(name, initializer),
             Stmt::Block(stmts) => visitor.visit_block(stmts),
             Stmt::Function(name, params, body) => visitor.visit_function(name, params, body),
+            Stmt::Return(keyword, expr) => visitor.visit_return(keyword, expr),
         }
     }
 }
@@ -350,6 +355,8 @@ impl Parser {
             self.if_statement()       
         } else if self.expect_token_type_one_of(vec![Token::PRINT]) {
             self.print_statement()
+        } else if self.expect_token_type_one_of(vec![Token::RETURN]) {
+            self.return_statement()        
         } else if self.expect_token_type_one_of(vec![Token::WHILE]) {
             self.while_statement()
         } else if self.expect_token_type_one_of(vec![Token::FOR]) {
@@ -377,7 +384,10 @@ impl Parser {
 
     fn print_statement(&mut self) -> Result<Stmt, String> {
         let value = self.expression()?;
-        self.consume(&Token::SEMICOLON, format!("Expect ';'after value."))?;
+        /*println!("PRINTING VALUE: {:?}", value);
+        println!("after print expression, next up is: {:?}", self.peek());
+        println!("previous was {:?}", self.previous());*/
+        self.consume(&Token::SEMICOLON, format!("Expect ';' after to-print-value."))?;
 
         return Ok(Stmt::Print(value))
     }
@@ -385,7 +395,6 @@ impl Parser {
     fn expression_statement(&mut self) -> Result<Stmt, String> {
         let expr = self.expression()?;
         self.consume(&Token::SEMICOLON, format!("Expect ';' after print-expression"))?;
-
         return Ok(Stmt::Expression(expr))
     }
 
@@ -471,6 +480,18 @@ impl Parser {
         return Ok(Stmt::Var(name, initializer.unwrap_or(Box::new(Expr::Literal(Object::Nil)))));
     }
 
+    fn return_statement(&mut self) -> Result<Stmt, String> {
+        let keyword = self.previous().token.to_string();
+        let mut value = if !self.check(&Token::SEMICOLON) {
+            self.expression()?
+        } else {
+            Box::new(Expr::Literal(Object::Nil))
+        };
+
+        self.consume(&Token::SEMICOLON, "Expect ';' after return value.".to_string());
+        return Ok(Stmt::Return(keyword, value));
+    }
+
     fn function(&mut self, kind: String) -> Result<Stmt, String> {
         let fn_name = {
             let fn_name = self.consume(&Token::Identifier("".to_string()), format!("Expect {} name.", kind))?;
@@ -486,8 +507,8 @@ impl Parser {
         let mut params = vec![];
         self.consume(&Token::LEFT_PAREN, format!("Expect '(' before {} name", kind));
 
-        if !self.check(&Token::RIGHT_BRACE) {
-            println!("{:?}", self.peek());
+        if !self.check(&Token::RIGHT_PAREN) {
+            //println!("{:?}", self.peek());
             let tloc: &TokenLoc = self.consume(&Token::Identifier("".to_string()), "1st Expect parameter name".to_string())?;
             if let Token::Identifier(name) = tloc.token.clone() {
                 params.push(name);
@@ -512,7 +533,6 @@ impl Parser {
         if self.expect_token_type_one_of(vec![Token::VAR]) {
             self.var_declaration()
         } else if self.expect_token_type_one_of(vec![Token::FUN]) {
-            println!("Function!!");
             self.function(format!("function"))
         } else {
             self.statement()
@@ -526,6 +546,7 @@ impl Parser {
         let mut statements = vec![];
 
         while !self.is_at_end() {
+            println!("keep parsing...");
             statements.push(self.declaration()?);
         }
 

@@ -115,6 +115,7 @@ impl<'a> Scanner<'a> {
 
     fn is_at_end(&self) -> bool {
         //println!("pos: {}, len: {}", self.position, self.source.len());
+        //println!("is_at_end: {} >= {}", self.position, self.source.len());
         return self.position >= self.source.len()
     }
 
@@ -127,7 +128,7 @@ impl<'a> Scanner<'a> {
 
             if c == '\n' {
                 self.line += 1;
-                self.column = 1;
+                self.column = c.len_utf8();
             }
 
             self.advance();
@@ -161,7 +162,7 @@ impl<'a> Scanner<'a> {
             },
             '"' => self.string(),
             c if c.is_numeric() => self.number(c),
-            c if c.is_alphanumeric() => self.identifier_or_keyword(c),
+            c if c.is_alphanumeric() || c == '_' || is_emoji(c) => self.identifier_or_keyword(c),
             c => Token::Error(format!("Uknown token {}", c)),
         };
 
@@ -230,24 +231,38 @@ impl<'a> Scanner<'a> {
     }
 
     fn identifier(&mut self, first: char) -> Token {
+        
+
+
         let mut acc = String::new();
         acc.push(first);
 
         while let Some(&c) = self.chars.peek() {
-            if !c.is_alphanumeric() {
+            if is_emoji(c) {
+                println!("EOMJIJO");
+            }
+            if !c.is_alphanumeric() && c != '_' && !is_emoji(c) {
                 break;
             }
 
             acc.push(self.advance());
         }
 
+        println!("parsed identifier {}", acc);
         Token::Identifier(acc)
     }
 
     fn advance(&mut self) -> char {
-        self.position += 1;
-        self.column += 1;
-        return self.chars.next().unwrap()
+        match self.chars.next() {
+            Some(c) => {
+                self.position += c.len_utf8();
+                self.column += 1;
+                return c
+            },
+            None => {
+                return ' '; // TODO: this is bad..
+            }
+        }
     }
 
     fn add_token(&mut self, token: Token) {
@@ -264,7 +279,19 @@ impl<'a> Scanner<'a> {
             return false;
         }
 
-        self.position += 1;
+        self.advance();
         return true;
     }
+}
+
+fn is_emoji(c: char) -> bool { // not sure where to put this :x
+    // Basic ranges for common emojis; this is not exhaustive.
+    (0x1F600..=0x1F64F).contains(&(c as u32)) || // Emoticons
+    (0x1F300..=0x1F5FF).contains(&(c as u32)) || // Misc Symbols and Pictographs
+    (0x1F680..=0x1F6FF).contains(&(c as u32)) || // Transport and Map
+    (0x2600..=0x26FF).contains(&(c as u32)) ||   // Misc symbols
+    (0x2700..=0x27BF).contains(&(c as u32)) ||   // Dingbats
+    (0xFE00..=0xFE0F).contains(&(c as u32)) ||   // Variation Selectors
+    (0x1F900..=0x1F9FF).contains(&(c as u32)) || // Supplemental Symbols and Pictographs
+    (0x1FA70..=0x1FAFF).contains(&(c as u32))    // More Supplemental Symbols and Pictographs
 }
