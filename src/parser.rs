@@ -14,7 +14,7 @@ pub struct Parser {
     current: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
     Binary(Box<Expr>, Token, Box<Expr>),
     Call(Box<Expr>, Token, Vec<Expr>),
@@ -29,14 +29,14 @@ pub enum Expr {
 impl Expr {
     pub fn visit<T>(&self, visitor: &mut dyn ExprVisitor<T>) -> T {
         match self {
-            Expr::Binary(left, op, right) => visitor.visit_binary(left, op, right),
-            Expr::Unary(op, right) => visitor.visit_unary(op, right),
-            Expr::Literal(value) => visitor.visit_literal(value),
-            Expr::Logical(left, op, right) => visitor.visit_logical(left, op, right),
+            Expr::Binary(left, op, right) => visitor.visit_binary(self.clone(), left, op, right),
+            Expr::Unary(op, right) => visitor.visit_unary(self.clone(), op, right),
+            Expr::Literal(value) => visitor.visit_literal(self.clone(), value),
+            Expr::Logical(left, op, right) => visitor.visit_logical(self.clone(), left, op, right),
             Expr::Grouping(expr) => visitor.visit_grouping(expr),
-            Expr::Variable(name) => visitor.visit_variable(name),
-            Expr::Assign(name, value) => visitor.visit_assign(name, value),
-            Expr::Call(callee, paren, args) => visitor.visit_call(callee, paren, args),
+            Expr::Variable(name) => visitor.visit_variable(self.clone(), name),
+            Expr::Assign(name, value) => visitor.visit_assign(self.clone(), name, value),
+            Expr::Call(callee, paren, args) => visitor.visit_call(self.clone(), callee, paren, args),
         }
     }
 }
@@ -60,7 +60,7 @@ impl std::fmt::Display for Expr {
 pub enum Stmt {
     Expression(Box<Expr>),
     Print(Box<Expr>),
-    Var(String, Box<Expr>),
+    Var(String, Option<Box<Expr>>),
     Block(Vec<Stmt>),
     If(Box<Expr>, Box<Stmt>, Option<Box<Stmt>>),
     While(Box<Expr>, Box<Stmt>),
@@ -73,7 +73,7 @@ impl std::fmt::Display for Stmt {
         match self {
             Stmt::Expression(expr) => write!(f, "Expression({})", expr),
             Stmt::Print(expr) => write!(f, "Print({})", expr),
-            Stmt::Var(name, expr) => write!(f, "Var({}, {})", name, expr),
+            Stmt::Var(name, expr) => write!(f, "Var({}, {})", name, expr.clone().unwrap_or(Box::new(Expr::Literal(Object::String("<<no initializer>>".to_string()))))),
             Stmt::Block(statements) => {
                 write!(f, "Block(")?;
                 for stmt in statements {
@@ -477,7 +477,7 @@ impl Parser {
 
         self.consume(&Token::SEMICOLON, format!("Expect ';' after variable declaration."));
 
-        return Ok(Stmt::Var(name, initializer.unwrap_or(Box::new(Expr::Literal(Object::Nil)))));
+        return Ok(Stmt::Var(name, initializer));
     }
 
     fn return_statement(&mut self) -> Result<Stmt, String> {
@@ -546,7 +546,6 @@ impl Parser {
         let mut statements = vec![];
 
         while !self.is_at_end() {
-            println!("keep parsing...");
             statements.push(self.declaration()?);
         }
 

@@ -248,7 +248,6 @@ impl<'a> Scanner<'a> {
             acc.push(self.advance());
         }
 
-        println!("parsed identifier {}", acc);
         Token::Identifier(acc)
     }
 

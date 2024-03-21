@@ -10,7 +10,11 @@ fun count(n) {
     print n;
 }
 
-hello("world");
-hello("Kirth");
+fun abs(x) {
+    if (x <= 1) {
+        return -x;
 
-count(3);
+    return x;
+}
+
+print abs(-3);

@@ -1,1 +1,1 @@
-if (3 < 4 and 6 > 5) { print "Hello World!"; } else { print "Uh oh"; }
+print 2 >= 2;
