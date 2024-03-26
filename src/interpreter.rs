@@ -8,12 +8,15 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use rand::Rng;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::cmp::Ordering;
 
 use crate::parser::*;
 use crate::scanner::*;
 
 // this is not a Box<dyn Callable> because those can't be easily cloned
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Callable {
     Lox(LoxFunction),
     Native(NativeFunction),
@@ -33,28 +36,29 @@ pub struct LoxFunction {
     // this should contain the declaration
     name: Option<String>,
     declaration: Box<Stmt>,
-    params: Vec<String>,
+    params: Vec<TokenLoc>,
     closure: Environment,
     // does this thing need its own environment/closure?
     is_method: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct NativeFunction {
-    name: Option<String>,
-    funct: fn(&Interpreter, Vec<Object>) -> Option<Object>, // todo: better error handling?
-    params: Vec<String>,
-}
-
-impl NativeFunction {
-    fn arity(&self) -> usize {
-        self.params.len()
-    }
-
-    fn invoke(&self, interpreter: &Interpreter, args: Vec<Object>) -> Option<Object> {
-        (self.funct)(interpreter, args)
+impl PartialEq for LoxFunction {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.params == other.params && &self.declaration == &other.declaration
     }
 }
+
+impl Eq for LoxFunction {}
+
+impl Hash for LoxFunction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.params.hash(state);
+        // Simplified hashing for declaration
+        //stmt_hash(&self.declaration, state);
+    }
+}
+
 
 impl LoxFunction {
     fn arity(&self) -> usize {
@@ -71,8 +75,13 @@ impl LoxFunction {
     
 
         for (k, v) in self.params.iter().zip(args.iter()) {
+            if let Token::Identifier(name) = &k.token {
+                let _ = env.define(name.clone(), v.clone());
+            } else {
+                panic!("LoxFunction::invoke assigning non-identifier {:?} as param name", k);
+            }
             //println!("binding {} == {}", k, v);
-            let _ = env.define(k.clone(), v.clone());
+            
         }
         //println!("executing function {} with declaration {:?}", self.name.clone().unwrap(), self.declaration);
         interpreter.execute_block(&vec![*self.declaration.clone()], Rc::new(RefCell::new(env)))
@@ -81,7 +90,7 @@ impl LoxFunction {
 
     pub fn new(
         name: Option<String>,
-        params: &Vec<String>,
+        params: &Vec<TokenLoc>,
         body: &Box<Stmt>,
         closure: Environment,
     ) -> Self {
@@ -96,12 +105,85 @@ impl LoxFunction {
 }
 
 #[derive(Debug, Clone)]
+pub struct NativeFunction {
+    name: Option<String>,
+    funct: fn(&Interpreter, Vec<Object>) -> Option<Object>, // todo: better error handling?
+    params: Vec<TokenLoc>,
+}
+
+impl NativeFunction {
+    fn arity(&self) -> usize {
+        self.params.len()
+    }
+
+    fn invoke(&self, interpreter: &Interpreter, args: Vec<Object>) -> Option<Object> {
+        (self.funct)(interpreter, args)
+    }
+}
+
+impl PartialEq for NativeFunction {
+    fn eq(&self, other: &Self) -> bool {
+        self.name == other.name && self.params == other.params
+    }
+}
+
+impl Eq for NativeFunction {}
+
+impl Hash for NativeFunction {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+        self.params.hash(state);
+        // We cannot directly hash `funct`, so we rely on name and params for identity.
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum Object {
     String(String),
     Number(f64),
     Boolean(bool),
     Callable(Callable),
     Nil,
+}
+
+impl PartialEq for Object {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Object::String(a), Object::String(b)) => a == b,
+            (Object::Number(a), Object::Number(b)) => a == b,
+            (Object::Boolean(a), Object::Boolean(b)) => a == b,
+            (Object::Callable(a), Object::Callable(b)) => a == b,
+            (Object::Nil, Object::Nil) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Object {}
+
+impl Hash for Object {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Object::String(s) => {
+                s.hash(state);
+            },
+            Object::Number(n) => {
+                // Use the wrapper strategy indirectly for f64
+                n.to_bits().hash(state);
+            },
+            Object::Boolean(b) => {
+                b.hash(state);
+            },
+            Object::Callable(c) => {
+                // Assuming Callable implements Hash
+                c.hash(state);
+            },
+            Object::Nil => {
+                // Just use a constant value to represent Nil
+                0.hash(state);
+            }
+        }
+    }
 }
 
 impl std::fmt::Display for Object {
@@ -147,17 +229,19 @@ impl std::fmt::Display for LoxFunction {
 }
 
 pub trait ExprVisitor<T> {
-    fn visit_binary(&mut self, expr: Expr, left: &Expr, op: &Token, right: &Expr) -> T;
-    fn visit_unary(&mut self, expr: Expr, op: &Token, right: &Expr) -> T;
+    fn visit_binary(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> T;
+    fn visit_unary(&mut self, expr: Expr, op: &TokenLoc, right: &Expr) -> T;
     fn visit_literal(&mut self, expr: Expr, value: &Object) -> T;
-    fn visit_logical(&mut self, expr: Expr, left: &Expr, op: &Token, right: &Expr) -> T;
+    fn visit_logical(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> T;
     fn visit_grouping(&mut self, expr: &Expr) -> T;
-    fn visit_variable(&mut self, expr: Expr, name: &String) -> T; // TODO: I don't want to copy variables on every use.
+    fn visit_variable(&mut self, expr: Expr, name: &TokenLoc) -> T; // TODO: I don't want to copy variables on every use.
                                                       // this may mean wrapping them in RCs?  Do we even need ExprVisitor to be generic?,
-    fn visit_assign(&mut self, expr: Expr, name: &String, value: &Expr) -> T;
-    fn visit_call(&mut self, expr: Expr, callee: &Box<Expr>, paren: &Token, args: &Vec<Expr>) -> T;
+    fn visit_assign(&mut self, expr: Expr, name: &TokenLoc, value: &Expr) -> T;
+    fn visit_call(&mut self, expr: Expr, callee: &Box<Expr>, paren: &TokenLoc, args: &Vec<Expr>) -> T;
 }
 
+// QUEST: in hindsight, it probably makes more sense to clone these and pass them down
+// What would the impact of using an Rc be, memory wise and runtime wise?
 pub trait StmtVisitor {
     // statements produce no values
     fn visit_expression(&mut self, expr: &Box<Expr>) -> Option<Object>; // TODO: do I pass in boxes here?
@@ -169,15 +253,15 @@ pub trait StmtVisitor {
         else_stmt: &Option<Box<Stmt>>,
     ) -> Option<Object>;
     fn visit_while(&mut self, condition: &Box<Expr>, body: &Box<Stmt>) -> Option<Object>;
-    fn visit_var(&mut self, name: &String, initializer: &Option<Box<Expr>>) -> Option<Object>;
+    fn visit_var(&mut self, name: &TokenLoc, initializer: &Option<Box<Expr>>) -> Option<Object>;
     fn visit_block(&mut self, stmts: &Vec<Stmt>) -> Option<Object>; // hack: passing objects to support return values.
     fn visit_function(
         &mut self,
-        name: &String,
-        params: &Vec<String>,
+        name: &TokenLoc,
+        params: &Vec<TokenLoc>,
         body: &Box<Stmt>,
     ) -> Option<Object>;
-    fn visit_return(&mut self, keyword: &String, value: &Box<Expr>) -> Option<Object>;
+    fn visit_return(&mut self, keyword: &TokenLoc, value: &Box<Expr>) -> Option<Object>;
 }
 
 #[derive(Debug, Clone)]
@@ -239,7 +323,7 @@ impl Environment {
 
     pub fn with_enclosing(enclosing: Rc<RefCell<Environment>>) -> Rc<RefCell<Environment>> {
         let uid = get_next_uid();
-        println!("ENCLOSING OVER NEW ENVIRONMENT, NOW AT UID {}", uid);
+        //println!("ENCLOSING OVER NEW ENVIRONMENT, NOW AT UID {}", uid);
         Rc::new(RefCell::new(Environment {
             values: std::collections::HashMap::new(),
             uid: uid,
@@ -308,7 +392,7 @@ impl Environment {
 
         let ans = self.ancestor(distance);
         let mut bans = ans.borrow_mut();
-        println!("assigning {} at depth {} into {:?}", name, distance, bans);
+        //println!("assigning {} at depth {} into {:?}", name, distance, bans);
         bans.define(name, value);
     }
 
@@ -331,12 +415,12 @@ impl Environment {
 pub struct AstPrinter;
 
 impl ExprVisitor<String> for AstPrinter {
-    fn visit_binary(&mut self, expr: Expr, left: &Expr, op: &Token, right: &Expr) -> String {
-        self.parenthesize(format!("{}", op), &[left, right])
+    fn visit_binary(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> String {
+        self.parenthesize(format!("{:?}", op), &[left, right])
     }
 
-    fn visit_unary(&mut self, expr: Expr, op: &Token, right: &Expr) -> String {
-        self.parenthesize(format!("{}", op), &[right])
+    fn visit_unary(&mut self, expr: Expr, op: &TokenLoc, right: &Expr) -> String {
+        self.parenthesize(format!("{:?}", op), &[right])
     }
 
     fn visit_grouping(&mut self, expr: &Expr) -> String {
@@ -347,19 +431,19 @@ impl ExprVisitor<String> for AstPrinter {
         value.to_string()
     }
 
-    fn visit_logical(&mut self, expr: Expr, left: &Expr, op: &Token, right: &Expr) -> String {
-        self.parenthesize(format!("{}", op), &[left, right])
+    fn visit_logical(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> String {
+        self.parenthesize(format!("{:?}", op), &[left, right])
     }
 
-    fn visit_variable(&mut self, expr: Expr, name: &String) -> String {
-        name.to_string()
+    fn visit_variable(&mut self, expr: Expr, name: &TokenLoc) -> String {
+        format!("{:?}", name)
     }
 
-    fn visit_assign(&mut self, expr: Expr, name: &String, value: &Expr) -> String {
-        self.parenthesize(format!("assign {}", name), &[value])
+    fn visit_assign(&mut self, expr: Expr, name: &TokenLoc, value: &Expr) -> String {
+        self.parenthesize(format!("assign {:?}", name), &[value])
     }
 
-    fn visit_call(&mut self, expr: Expr, callee: &Box<Expr>, paren: &Token, args: &Vec<Expr>) -> String {
+    fn visit_call(&mut self, expr: Expr, callee: &Box<Expr>, paren: &TokenLoc, args: &Vec<Expr>) -> String {
         let args: Vec<_> = args.iter().collect();
         if let Expr::Call(callee, paren, args) = (*callee.clone()) {};
 
@@ -379,7 +463,7 @@ impl StmtVisitor for AstPrinter {
         None
     }
 
-    fn visit_var(&mut self, name: &String, initializer: &Option<Box<Expr>>) -> Option<Object> {
+    fn visit_var(&mut self, name: &TokenLoc, initializer: &Option<Box<Expr>>) -> Option<Object> {
         initializer.clone().unwrap_or(Box::new(Expr::Literal(Object::String("!this var has no initializer!".to_string())))).visit(self);
         None
     }
@@ -408,15 +492,15 @@ impl StmtVisitor for AstPrinter {
 
     fn visit_function(
         &mut self,
-        name: &String,
-        params: &Vec<String>,
+        name: &TokenLoc,
+        params: &Vec<TokenLoc>,
         body: &Box<Stmt>,
     ) -> Option<Object> {
         body.visit(self);
         None
     }
 
-    fn visit_return(&mut self, keyword: &String, value: &Box<Expr>) -> Option<Object> {
+    fn visit_return(&mut self, keyword: &TokenLoc, value: &Box<Expr>) -> Option<Object> {
         value.visit(self);
         None
     }
@@ -548,8 +632,8 @@ impl Interpreter {
     }
 
     pub fn resolve(&mut self, expr: Expr, depth: usize) {
-        println!("resolving {} \t\t=> {}", name, depth);
-        self.locals.insert(name, depth);
+        println!("resolving {} \t\t=> {}", expr, depth);
+        self.locals.insert(expr, depth);
         println!("RESOLVE/LOCALS: {:#?}", self.locals);
     }
 
@@ -578,9 +662,13 @@ impl Interpreter {
         return res;
     }
 
-    fn lookup_var(&self, name: &String) -> Option<Object> {
-        let dist = self.locals.get(name);
-        println!("looking up {} at dist {:?}", name, dist);
+    fn lookup_var(&self, expr: &Expr, name: &TokenLoc) -> Option<Object> {
+        let dist = self.locals.get(expr);
+        let name = match &name.token {
+            Token::Identifier(name) => name.clone(),
+            e => format!("{:?}", e)
+        };
+        print!("looking up {} through expr {:?} at dist {:?}: ", name, expr, dist);
 
         //println!("locals: {:#?}", self.locals);
         //println!("self_env: {:#?}", self.env);
@@ -589,19 +677,21 @@ impl Interpreter {
             //println!("==> value: {:?}", self.env.borrow().get_at(*dist, name));
             //println!("{:#?}", self.env);
             //println!("getting {} at dist {}: {:?}", name, dist, self.env.borrow().get_at(*dist, name));
-            return self.env.borrow().get_at(*dist, name);
+            println!("{:?}", self.env.borrow().get_at(*dist, &name).is_some());
+            return self.env.borrow().get_at(*dist, &name);
         } else {
-            return self.globals.borrow().get(name).ok();
+            println!("{:?}", self.globals.borrow().get(&name).ok().is_some());
+            return self.globals.borrow().get(&name).ok();
         }
     }
 }
 
 impl ExprVisitor<Result<Object, String>> for Interpreter {
-    fn visit_binary(&mut self, expr: Expr, left: &Expr, op: &Token, right: &Expr) -> Result<Object, String> {
+    fn visit_binary(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> Result<Object, String> {
         let left = self.evaluate(left)?;
         let right = self.evaluate(right)?;
 
-        match (op, &left, &right) {
+        match (&op.token, &left, &right) {
             // Number
             (Token::MINUS, Object::Number(l), Object::Number(r)) => Ok(Object::Number(l - r)),
             (Token::PLUS, Object::Number(l), Object::Number(r)) => Ok(Object::Number(l + r)),
@@ -639,19 +729,19 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
         }
     }
 
-    fn visit_unary(&mut self, expr: Expr, op: &Token, right: &Expr) -> Result<Object, String> {
+    fn visit_unary(&mut self, expr: Expr, op: &TokenLoc, right: &Expr) -> Result<Object, String> {
         let right = self.evaluate(right)?;
 
-        match op {
+        match &op.token {
             Token::MINUS => match right {
                 Object::Number(d) => Ok(Object::Number(-d)),
                 _ => Err(format!(
                     "unary operator {} only supports Object::Number",
-                    op
+                    op.token
                 )),
             },
             Token::BANG => Ok(Object::Boolean(!Interpreter::is_truthy(&right))),
-            _ => Err(format!("unsupported unary operator {}", op)),
+            e => Err(format!("unsupported unary operator {}", e)),
         }
     }
 
@@ -663,12 +753,12 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
         Ok(value.clone()) // todo: does this eat memory?
     }
 
-    fn visit_logical(&mut self, expr: Expr, left: &Expr, op: &Token, right: &Expr) -> Result<Object, String> {
+    fn visit_logical(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> Result<Object, String> {
         let lobj = self.evaluate(left)?;
 
-        println!("{};evaluated l-expr: {}, op: {}", left, lobj, &op);
+        println!("{};evaluated l-expr: {}, op: {}", left, lobj, &op.token);
 
-        if op == &Token::OR {
+        if op.token == Token::OR {
             if Self::is_truthy(&lobj) {
                 return Ok(lobj);
             }
@@ -681,15 +771,20 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
         return Ok(self.evaluate(right)?);
     }
 
-    fn visit_variable(&mut self, expr: Expr, name: &String) -> Result<Object, String> {
+    fn visit_variable(&mut self, expr: Expr, name: &TokenLoc) -> Result<Object, String> {
         //self.env.borrow().get(name)
-        self.lookup_var(name).ok_or(format!("err while looking up var {} in visit_variable", name))
+        self.lookup_var(&expr, name).ok_or(format!("err while looking up var {:?} in visit_variable in env: {:#?}", name, "cuck")) //self.env))
     }
 
-    fn visit_assign(&mut self, expr: Expr, name: &String, value: &Expr) -> Result<Object, String> {
+    fn visit_assign(&mut self, expr: Expr, name: &TokenLoc, value: &Expr) -> Result<Object, String> {
         let value = self.evaluate(value)?;
+        let name = match &name.token {
+            Token::Identifier(name) => name.clone(),
+            e => format!("{:?}", e)
+        };
+        
 
-        if let Some(dist) = self.locals.get(name) {
+        if let Some(dist) = self.locals.get(&expr) {
             self.env.borrow_mut().assign_at(*dist, name.clone(), value.clone());
             return Ok(value); // QUEST: do we need this?  would this mean var a = (b = c); a == c?
         } else {
@@ -707,7 +802,7 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
         &mut self,
         expr: Expr,
         callee: &Box<Expr>,
-        paren: &Token,
+        paren: &TokenLoc,
         args: &Vec<Expr>,
     ) -> Result<Object, String> {
         let callee = self.evaluate(callee)?;
@@ -744,7 +839,7 @@ impl StmtVisitor for Interpreter {
         return None;
     }
 
-    fn visit_var(&mut self, name: &String, initializer: &Option<Box<Expr>>) -> Option<Object> {
+    fn visit_var(&mut self, name: &TokenLoc, initializer: &Option<Box<Expr>>) -> Option<Object> {
         // variable definition
         let value = if let Some(initializer) = initializer {
                 match self.evaluate(&initializer) {
@@ -753,7 +848,12 @@ impl StmtVisitor for Interpreter {
             }
         } else { Object::Nil };
 
-        self.env.borrow_mut().define(name.to_string(), value);
+        let name = match &name.token {
+            Token::Identifier(name) => name.clone(),
+            e => format!("{:?}", e)
+        };
+
+        self.env.borrow_mut().define(name, value);
         return None;
     }
 
@@ -778,14 +878,13 @@ impl StmtVisitor for Interpreter {
     }
 
     fn visit_while(&mut self, condition: &Box<Expr>, body: &Box<Stmt>) -> Option<Object> {
-        if let Some(condition) = &self.evaluate(&condition).ok() {
-            println!("WHILE CONDITION: {:?}", condition);
-            while Self::is_truthy(condition) {
-                let res = self.execute(body);
+        //println!("in-while> evaluating condition '{:?}'", condition);
+        while Self::is_truthy(&condition.visit(self).ok()?) {
+            //  println!("in-while> condition '{:?}' still considered truthy", condition);
+            let res = self.execute(body);
 
-                if res.is_some() {
-                    return res;
-                }
+            if res.is_some() {
+                return res;
             }
         }
 
@@ -794,10 +893,12 @@ impl StmtVisitor for Interpreter {
 
     fn visit_function(
         &mut self,
-        name: &String,
-        params: &Vec<String>,
+        name: &TokenLoc,
+        params: &Vec<TokenLoc>,
         body: &Box<Stmt>,
     ) -> Option<Object> {
+        let name = if let Token::Identifier(name) = name.token.clone() { name }
+        else { panic!("resolver::resolve_local on non-Identifier token: {:?}", name) };
         let env = Environment::with_enclosing(self.env.clone())
             .borrow()
             .clone(); // TODO FIX: this clones the parent but doesn't link back to it, so any new functions defined will not be found
@@ -811,7 +912,7 @@ impl StmtVisitor for Interpreter {
         return None;
     }
 
-    fn visit_return(&mut self, keyword: &String, value: &Box<Expr>) -> Option<Object> {
+    fn visit_return(&mut self, keyword: &TokenLoc, value: &Box<Expr>) -> Option<Object> {
         self.evaluate(&value).ok()
     }
 }

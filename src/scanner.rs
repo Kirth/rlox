@@ -4,11 +4,13 @@
 // In pass 1: I will not add any extra bells and whistles to Lox
 use core::panic;
 use std::borrow::Borrow;
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 
 use crate::interpreter::*;
 use crate::parser::*;
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub enum Token {
     LEFT_PAREN, RIGHT_PAREN, LEFT_BRACE, RIGHT_BRACE,
     COMMA, DOT, MINUS, PLUS, SEMICOLON, SLASH, STAR,
@@ -26,6 +28,70 @@ pub enum Token {
     PRINT, RETURN, SUPER, THIS, TRUE, VAR, WHILE,
 
     EOF, Error(String), Comment(String)
+}
+
+impl PartialEq for Token {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Token::LEFT_PAREN, Token::LEFT_PAREN) | (Token::RIGHT_PAREN, Token::RIGHT_PAREN) |
+            (Token::LEFT_BRACE, Token::LEFT_BRACE) | (Token::RIGHT_BRACE, Token::RIGHT_BRACE) |
+            (Token::COMMA, Token::COMMA) | (Token::DOT, Token::DOT) |
+            (Token::MINUS, Token::MINUS) | (Token::PLUS, Token::PLUS) |
+            (Token::SEMICOLON, Token::SEMICOLON) | (Token::SLASH, Token::SLASH) |
+            (Token::STAR, Token::STAR) | (Token::BANG, Token::BANG) |
+            (Token::BANG_EQ, Token::BANG_EQ) | (Token::EQ, Token::EQ) |
+            (Token::EQ_EQ, Token::EQ_EQ) | (Token::GT, Token::GT) |
+            (Token::GT_EQ, Token::GT_EQ) | (Token::LS, Token::LS) |
+            (Token::LS_EQ, Token::LS_EQ) | (Token::AND, Token::AND) |
+            (Token::CLASS, Token::CLASS) | (Token::ELSE, Token::ELSE) |
+            (Token::FALSE, Token::FALSE) | (Token::FUN, Token::FUN) |
+            (Token::FOR, Token::FOR) | (Token::IF, Token::IF) |
+            (Token::NIL, Token::NIL) | (Token::OR, Token::OR) |
+            (Token::PRINT, Token::PRINT) | (Token::RETURN, Token::RETURN) |
+            (Token::SUPER, Token::SUPER) | (Token::THIS, Token::THIS) |
+            (Token::TRUE, Token::TRUE) | (Token::VAR, Token::VAR) |
+            (Token::WHILE, Token::WHILE) | (Token::EOF, Token::EOF) =>
+                true,
+            (Token::Identifier(a), Token::Identifier(b)) => a == b,
+            (Token::String(a), Token::String(b)) => a == b,
+            (Token::Number(a), Token::Number(b)) => a == b,
+            (Token::Error(a), Token::Error(b)) => a == b,
+            (Token::Comment(a), Token::Comment(b)) => a == b,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for Token {}
+
+impl Hash for Token {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Token::Identifier(s) => {
+                "Identifier".hash(state);
+                s.hash(state);
+            },
+            Token::String(s) => {
+                "String".hash(state);
+                s.hash(state);
+            },
+            Token::Number(n) => {
+                "Number".hash(state);
+                let mut hasher = DefaultHasher::new();
+                n.to_bits().hash(&mut hasher);
+                hasher.finish().hash(state);
+            },
+            Token::Error(s) => {
+                "Error".hash(state);
+                s.hash(state);
+            },
+            Token::Comment(s) => {
+                "Comment".hash(state);
+                s.hash(state);
+            },
+            _ => std::mem::discriminant(self).hash(state),
+        }
+    }
 }
 
 impl std::fmt::Display for Token {
@@ -76,7 +142,7 @@ impl std::fmt::Display for Token {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TokenLoc {
     pub token: Token,
     pub line: usize,

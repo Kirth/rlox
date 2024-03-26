@@ -16,14 +16,14 @@ pub struct Parser {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expr {
-    Binary(Box<Expr>, Token, Box<Expr>),
-    Call(Box<Expr>, Token, Vec<Expr>),
-    Unary(Token, Box<Expr>),
+    Binary(Box<Expr>, TokenLoc, Box<Expr>),
+    Call(Box<Expr>, TokenLoc, Vec<Expr>),
+    Unary(TokenLoc, Box<Expr>),
     Literal(Object),
-    Logical(Box<Expr>, Token, Box<Expr>),
+    Logical(Box<Expr>, TokenLoc, Box<Expr>),
     Grouping(Box<Expr>),
-    Variable(String),
-    Assign(String, Box<Expr>)
+    Variable(TokenLoc),
+    Assign(TokenLoc, Box<Expr>)
 }
 
 impl Expr {
@@ -44,28 +44,28 @@ impl Expr {
 impl std::fmt::Display for Expr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Expr::Binary(left, op, right) => write!(f, "Binary({}, {}, {})", left, op, right),
-            Expr::Unary(op, expr) => write!(f, "Unary({}, {})", op, expr),
+            Expr::Binary(left, op, right) => write!(f, "Binary({}, {:?}, {})", left, op, right),
+            Expr::Unary(op, expr) => write!(f, "Unary({:?}, {:?})", op, expr),
             Expr::Literal(obj) => write!(f, "Literal({})", obj),
-            Expr::Logical(left, op, right) => write!(f, "Logical({}, {}, {})", left, op, right),
+            Expr::Logical(left, op, right) => write!(f, "Logical({}, {:?}, {})", left, op, right),
             Expr::Grouping(expr) => write!(f, "Grouping({})", expr),
-            Expr::Variable(name) => write!(f, "Variable({})", name),
-            Expr::Assign(name, expr) => write!(f, "Assign({}, {})", name, expr),
+            Expr::Variable(name) => write!(f, "Variable({:?})", name),
+            Expr::Assign(name, expr) => write!(f, "Assign({:?}, {})", name, expr),
             Expr::Call(callee, paren, args) => write!(f, "Call({}({:?}))", callee, args),
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Stmt {
     Expression(Box<Expr>),
     Print(Box<Expr>),
-    Var(String, Option<Box<Expr>>),
+    Var(TokenLoc, Option<Box<Expr>>),
     Block(Vec<Stmt>),
     If(Box<Expr>, Box<Stmt>, Option<Box<Stmt>>),
     While(Box<Expr>, Box<Stmt>),
-    Function(String, Vec<String>, Box<Stmt>),
-    Return(String, Box<Expr>), // keyword, value
+    Function(TokenLoc, Vec<TokenLoc>, Box<Stmt>),
+    Return(TokenLoc, Box<Expr>), // keyword, value
 }
 
 impl std::fmt::Display for Stmt {
@@ -73,7 +73,7 @@ impl std::fmt::Display for Stmt {
         match self {
             Stmt::Expression(expr) => write!(f, "Expression({})", expr),
             Stmt::Print(expr) => write!(f, "Print({})", expr),
-            Stmt::Var(name, expr) => write!(f, "Var({}, {})", name, expr.clone().unwrap_or(Box::new(Expr::Literal(Object::String("<<no initializer>>".to_string()))))),
+            Stmt::Var(name, expr) => write!(f, "Var({:?}, {})", name, expr.clone().unwrap_or(Box::new(Expr::Literal(Object::String("<<no initializer>>".to_string()))))),
             Stmt::Block(statements) => {
                 write!(f, "Block(")?;
                 for stmt in statements {
@@ -92,10 +92,10 @@ impl std::fmt::Display for Stmt {
                 write!(f, "While({}, {}, ", condition, body)
             },
             Stmt::Function(name, args, body) => {
-                write!(f, "Fn:{}({:?})", name, args)
+                write!(f, "Fn:{:?}({:?})", name, args)
             }
             Stmt::Return(keyword, expr) => {
-                write!(f, "Return:{}({:?})", keyword, expr)
+                write!(f, "Return:{:?}({:?})", keyword, expr)
             }
         }
     }
@@ -132,7 +132,7 @@ impl Parser {
         let mut e = self.comparison()?;
 
         while self.expect_token_type_one_of(vec![Token::EQ_EQ, Token::BANG_EQ]) {
-            let op = self.previous().token.clone();
+            let op = self.previous().clone();
             let right = self.comparison()?;
             e = Box::new(Expr::Binary(e, op, right));
         }
@@ -144,7 +144,7 @@ impl Parser {
         let mut e = self.term()?;
 
         while self.expect_token_type_one_of(vec![Token::GT, Token::GT_EQ, Token::LS, Token::LS_EQ]) {
-            let op = self.previous().token.clone();
+            let op = self.previous().clone();
             let right = self.term()?;
             e = Box::new(Expr::Binary(e, op, right));
         }
@@ -156,7 +156,7 @@ impl Parser {
         let mut e = self.factor()?;
 
         while self.expect_token_type_one_of(vec![Token::MINUS, Token::PLUS]) {
-            let op = self.previous().token.clone();
+            let op = self.previous().clone();
             let right = self.factor()?;
             e = Box::new(Expr::Binary(e, op, right));
         }
@@ -168,7 +168,7 @@ impl Parser {
         let mut e = self.unary()?;
 
         while self.expect_token_type_one_of(vec![Token::SLASH, Token::STAR]) {
-            let op = self.previous().token.clone();
+            let op = self.previous().clone();
             let right = self.unary()?;
             e = Box::new(Expr::Binary(e, op, right));
         }
@@ -178,7 +178,7 @@ impl Parser {
 
     fn unary(&mut self) -> Result<Box<Expr>, String> {
         if self.expect_token_type_one_of(vec![Token::BANG, Token::MINUS]) {
-            let op = self.previous().token.clone();
+            let op = self.previous().clone();
             let right = self.unary()?;
 
             return Ok(Box::new(Expr::Unary(op, right)))
@@ -216,7 +216,7 @@ impl Parser {
         }
 
         let paren = self.consume(&Token::RIGHT_PAREN, format!(" Expect ')' after argument list."));
-        return Ok(Box::new(Expr::Call(callee, paren.unwrap().token.clone(), args)))
+        return Ok(Box::new(Expr::Call(callee, paren.unwrap().clone(), args)))
     }
 
     fn assignment(&mut self) -> Result<Box<Expr>, String> {
@@ -240,7 +240,7 @@ impl Parser {
         let mut expr = self.and()?;
 
         while self.expect_token_type_one_of(vec![Token::OR]) {
-            let op = self.previous().token.clone();
+            let op = self.previous().clone();
             let right = self.and()?;
             expr = Box::new(Expr::Logical(expr, op, right));
         }
@@ -252,7 +252,7 @@ impl Parser {
         let mut expr = self.equality()?;
 
         while self.expect_token_type_one_of(vec![Token::AND]) {
-            let op = self.previous().token.clone();
+            let op = self.previous().clone();
             let right = self.equality()?;
             expr = Box::new(Expr::Logical(expr, op, right));
         }
@@ -289,8 +289,9 @@ impl Parser {
         }
 
         if self.expect_token_type_one_of(vec![Token::Identifier(format!(""))]) {
-            match &self.previous().token {
-                Token::Identifier(n) => return Ok(Box::new(Expr::Variable(n.to_string()))),
+            let prev = self.previous();
+            match &prev.token {
+                Token::Identifier(n) => return Ok(Box::new(Expr::Variable(prev.clone()))),
                 _ => { panic!("invariant failure!") }
             }
         }
@@ -463,11 +464,9 @@ impl Parser {
     }
 
     fn var_declaration(&mut self) -> Result<Stmt, String> {
-        let name = if let Token::Identifier(name) = 
-            self.consume(&Token::Identifier(format!("")), format!("Expect variable name"))?.token.clone()  { name 
-        } else {
-            format!("boo boo pants")
-        };
+        //let name = if let Token::Identifier(name) = 
+        let name =
+            self.consume(&Token::Identifier(format!("")), format!("Expect variable name"))?.clone();
 
         let mut initializer = None;
 
@@ -481,7 +480,7 @@ impl Parser {
     }
 
     fn return_statement(&mut self) -> Result<Stmt, String> {
-        let keyword = self.previous().token.to_string();
+        let keyword = self.previous().clone();
         let mut value = if !self.check(&Token::SEMICOLON) {
             self.expression()?
         } else {
@@ -493,16 +492,7 @@ impl Parser {
     }
 
     fn function(&mut self, kind: String) -> Result<Stmt, String> {
-        let fn_name = {
-            let fn_name = self.consume(&Token::Identifier("".to_string()), format!("Expect {} name.", kind))?;
-            if let Token::Identifier(name) = fn_name.token.clone() {
-                name
-            } else {
-                "None".to_string() // todo: Option?
-            }
-        };
-
-        
+        let fn_name = self.consume(&Token::Identifier("".to_string()), format!("Expect {} name.", kind))?.clone();        
 
         let mut params = vec![];
         self.consume(&Token::LEFT_PAREN, format!("Expect '(' before {} name", kind));
@@ -511,13 +501,13 @@ impl Parser {
             //println!("{:?}", self.peek());
             let tloc: &TokenLoc = self.consume(&Token::Identifier("".to_string()), "1st Expect parameter name".to_string())?;
             if let Token::Identifier(name) = tloc.token.clone() {
-                params.push(name);
-            }
+                params.push(tloc.clone());
+            } 
 
             while self.expect_token_type_one_of(vec![Token::COMMA]) {
                 let tloc: &TokenLoc = self.consume(&Token::Identifier("".to_string()), "2nd Expect parameter name".to_string())?;
                 if let Token::Identifier(name) = tloc.token.clone() {
-                    params.push(name);
+                    params.push(tloc.clone());
                 }    
             }
         }

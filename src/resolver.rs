@@ -8,7 +8,7 @@ use std::collections::HashMap;
 #[derive(Debug)]
 pub struct Resolver<'a> {
     interpreter: &'a mut Interpreter,
-    scopes: Vec<HashMap<Expr, bool>>, // Vec is used as a Stack
+    scopes: Vec<HashMap<String, bool>>, // Vec is used as a Stack
 }
 
 impl<'a> Resolver<'a> {
@@ -50,50 +50,53 @@ impl<'a> Resolver<'a> {
         self.scopes.pop();
     }
 
-    fn declare(&mut self, expr: Expr) -> Result<(), String> {
+    fn declare(&mut self, id: Token) -> Result<(), String> {
         println!("DECLARE CALLED");
+
+        let id = if let Token::Identifier(id) = id { id }
+        else { panic!("resolver::declare on non-Identifier token: {:?}", id) };
+
         if let Some(scope) = self.scopes.last_mut() {
-            println!("declaring {} in scope {:?}", expr, scope);
-            if scope.contains_key(&expr) {
-                eprintln!("Variable with name {} already present in current scope.", expr);
-                return Err(format!("Variable with name {} already present in current scope.", expr));
+            println!("declaring {} in scope {:?}", id, scope);
+            if scope.contains_key(&id) {
+                eprintln!("Variable with name {} already present in current scope.", id);
+                return Err(format!("Variable with name {} already present in current scope.", id));
             }
-            scope.insert(expr, false);
+            scope.insert(id, false);
             return Ok(());
         }
 
         return Err("Declared but no scope".to_string());
     }
 
-    fn define(&mut self, expr: Expr) {
+    fn define(&mut self, id: Token) {
+        let id = if let Token::Identifier(id) = id { id }
+        else { panic!("resolver::define on non-Identifier token: {:?}", id) };
+
         if let Some(scope) = self.scopes.last_mut() {
-            scope.insert(expr, true);
+            scope.insert(id, true);
         }
     }
 
-    fn resolve_local(&mut self, expr: Expr) {
-        //println!("resolve_local for {}: scopes: {:#?}", name, self.scopes);
-        //println!("self.scopes.len: {:?}", self.scopes.len());
+    fn resolve_local(&mut self, id: &Token, expr: Expr) {
+        let id = if let Token::Identifier(id) = id.clone() { id }
+        else { panic!("resolver::resolve_local on non-Identifier token: {:?}", id) };
+        
         for i in  (0 .. self.scopes.len()).rev() {
-            //println!("CHECKSCOPE DIST {}", i);
-            //println!("I== {}", i);
-            if self.scopes.get(i).unwrap().get(&expr).is_some() {
-              //  print!("  => it does!  {:?}", self.scopes.get(i).unwrap().get(name));
+            if self.scopes.get(i).unwrap().get(&id).is_some() {
                 self.interpreter.resolve(expr, self.scopes.len() - 1 -  i);
                 return;
             } else {
-                //println!("SCOPES {} DOES NOT CONTAIN KEY {}", i, name);
+                println!("Scope({}) missing key '{}'", i, id);
             }
-
-            //println!();
         }
     }
 
-    fn resolve_fn(&mut self, name: &String, params: &Vec<String>, body: &Stmt) {
+    fn resolve_fn(&mut self, name: &TokenLoc, params: &Vec<TokenLoc>, body: &Stmt) {
         self.begin_scope();
         for param in params { 
-            self.declare(param.to_string());
-            self.define(param.to_string());
+            self.declare(param.token.clone());
+            self.define(param.token.clone());
         }
 
         self.resolve_stmt(&body);
@@ -102,32 +105,37 @@ impl<'a> Resolver<'a> {
 }
 
 impl<'a> ExprVisitor<Result<Object, String>> for Resolver<'a> {
-    fn visit_variable(&mut self, expr: Expr, name: &String) -> Result<Object, String> {
+    fn visit_variable(&mut self, expr: Expr, name: &TokenLoc) -> Result<Object, String> {
+        let id = if let Token::Identifier(id) = name.token.clone() { id }
+        else { panic!("resolver::visit_variable on non-Identifier token: {:?}", name) }; // this is the 3rd time I repeat this in the code now, that's silly
+
         if let Some(scope) = self.scopes.last() {
-            if scope.get(&expr) == Some(&false) {
-                return Err(format!("Can't read local variable {} in its own initializer.", name));
+            if scope.get(&id) == Some(&false) {
+                return Err(format!("Can't read local variable {:?} in its own initializer.", name));
             }
         }
 
-        println!("visiting variable {}", name);
+        println!("visiting variable {:?}", name);
 
-        self.resolve_local(expr);
+        self.resolve_local(&name.token, expr);
         return Ok(Object::Nil)
     }
 
-    fn visit_assign(&mut self, expr: Expr, name: &String, value: &Expr) -> Result<Object, String> {
+    fn visit_assign(&mut self, expr: Expr, name: &TokenLoc, value: &Expr) -> Result<Object, String> {
+        println!("VISIT ASSIGN");
         self.resolve_expr(value);
-        self.resolve_local(expr);
+        println!("RESOLVING LOCAL ASSIGN EXPR");
+        self.resolve_local(&name.token, expr);
         return Ok(Object::Nil);        
     }
 
-    fn visit_binary(&mut self, expr: Expr, left: &Expr, op: &Token, right: &Expr) -> Result<Object, String> {
+    fn visit_binary(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> Result<Object, String> {
         self.resolve_expr(left);
         self.resolve_expr(right);
         return Ok(Object::Nil);
     }
 
-    fn visit_call(&mut self, expr: Expr, callee: &Box<Expr>, paren: &Token, args: &Vec<Expr>) -> Result<Object, String> {
+    fn visit_call(&mut self, expr: Expr, callee: &Box<Expr>, paren: &TokenLoc, args: &Vec<Expr>) -> Result<Object, String> {
         self.resolve_expr(&**callee);
 
         for arg in args {
@@ -146,13 +154,13 @@ impl<'a> ExprVisitor<Result<Object, String>> for Resolver<'a> {
         return Ok(Object::Nil);
     }    
 
-    fn visit_logical(&mut self, expr: Expr, left: &Expr, op: &Token, right: &Expr) -> Result<Object, String> {
+    fn visit_logical(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> Result<Object, String> {
         self.resolve_expr(left);
         self.resolve_expr(right);
         return Ok(Object::Nil);
     }
 
-    fn visit_unary(&mut self, expr: Expr, op: &Token, right: &Expr) -> Result<Object, String> {
+    fn visit_unary(&mut self, expr: Expr, op: &TokenLoc, right: &Expr) -> Result<Object, String> {
         self.resolve_expr(right);
         return Ok(Object::Nil);
     }
@@ -168,26 +176,25 @@ impl<'a> StmtVisitor for Resolver<'a> {
         return None;
     }
 
-    fn visit_var(&mut self, name: &String, initializer: &Option<Box<Expr>>) -> Option<Object> {
-        self.declare(name.to_string());
-
+    fn visit_var(&mut self, name: &TokenLoc, initializer: &Option<Box<Expr>>) -> Option<Object> {
+        self.declare(name.token.clone());
         if let Some(initializer) = initializer {
             self.resolve_expr(&*initializer.clone());
         }
         
-        self.define(name.to_string());
+        self.define(name.token.clone());
 
         return None;
     }
 
     fn visit_function(
             &mut self,
-            name: &String,
-            params: &Vec<String>,
+            name: &TokenLoc,
+            params: &Vec<TokenLoc>,
             body: &Box<Stmt>,
         ) -> Option<Object> {
-        //self.declare();
-        //self.define(name.to_string());
+        self.declare(name.token.clone());
+        self.define(name.token.clone());
         self.resolve_fn(name, params, body);
 
         return None;
@@ -205,7 +212,7 @@ impl<'a> StmtVisitor for Resolver<'a> {
         return None;
     }
 
-    fn visit_return(&mut self, keyword: &String, value: &Box<Expr>) -> Option<Object> {
+    fn visit_return(&mut self, keyword: &TokenLoc, value: &Box<Expr>) -> Option<Object> {
         self.resolve_expr(&*value);
         return None;
     }
