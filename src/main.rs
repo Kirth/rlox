@@ -53,7 +53,6 @@ impl Lox {
 
                 let mut resolver = Resolver::new(&mut self.interpreter);
                 resolver.resolve_stmts(&stmts);
-                resolver.dump();
 
                 self.interpreter.interpret(stmts);
             }
@@ -65,7 +64,7 @@ impl Lox {
 }
 
 fn main() {
-    let path = "examples/for_loop.lox";
+    let path = "examples/counter.lox";
     let mut lox = Lox::new();
 
     /*  lox.run_stmts(vec![

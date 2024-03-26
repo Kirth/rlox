@@ -620,7 +620,7 @@ impl Interpreter {
     }
 
     pub fn interpret(&mut self, stmts: Vec<Stmt>) {
-        println!("pre-interpret() overview of locals: {:#?}", self.locals);
+        //println!("pre-interpret() overview of locals: {:#?}", self.locals);
 
         for stmt in stmts {
             self.execute(&stmt); // todo: catching runtime errors?
@@ -632,9 +632,9 @@ impl Interpreter {
     }
 
     pub fn resolve(&mut self, expr: Expr, depth: usize) {
-        println!("resolving {} \t\t=> {}", expr, depth);
+        //println!("resolving {} \t\t=> {}", expr, depth);
         self.locals.insert(expr, depth);
-        println!("RESOLVE/LOCALS: {:#?}", self.locals);
+        //println!("RESOLVE/LOCALS: {:#?}", self.locals);
     }
 
     fn execute_block(
@@ -668,7 +668,7 @@ impl Interpreter {
             Token::Identifier(name) => name.clone(),
             e => format!("{:?}", e)
         };
-        print!("looking up {} through expr {:?} at dist {:?}: ", name, expr, dist);
+        //print!("looking up {} through expr {:?} at dist {:?}: ", name, expr, dist);
 
         //println!("locals: {:#?}", self.locals);
         //println!("self_env: {:#?}", self.env);
@@ -677,10 +677,10 @@ impl Interpreter {
             //println!("==> value: {:?}", self.env.borrow().get_at(*dist, name));
             //println!("{:#?}", self.env);
             //println!("getting {} at dist {}: {:?}", name, dist, self.env.borrow().get_at(*dist, name));
-            println!("{:?}", self.env.borrow().get_at(*dist, &name).is_some());
+            //println!("{:?}", self.env.borrow().get_at(*dist, &name).is_some());
             return self.env.borrow().get_at(*dist, &name);
         } else {
-            println!("{:?}", self.globals.borrow().get(&name).ok().is_some());
+            //println!("{:?}", self.globals.borrow().get(&name).ok().is_some());
             return self.globals.borrow().get(&name).ok();
         }
     }

@@ -51,13 +51,11 @@ impl<'a> Resolver<'a> {
     }
 
     fn declare(&mut self, id: Token) -> Result<(), String> {
-        println!("DECLARE CALLED");
-
         let id = if let Token::Identifier(id) = id { id }
         else { panic!("resolver::declare on non-Identifier token: {:?}", id) };
 
         if let Some(scope) = self.scopes.last_mut() {
-            println!("declaring {} in scope {:?}", id, scope);
+            //println!("declaring {} in scope {:?}", id, scope);
             if scope.contains_key(&id) {
                 eprintln!("Variable with name {} already present in current scope.", id);
                 return Err(format!("Variable with name {} already present in current scope.", id));
@@ -87,7 +85,7 @@ impl<'a> Resolver<'a> {
                 self.interpreter.resolve(expr, self.scopes.len() - 1 -  i);
                 return;
             } else {
-                println!("Scope({}) missing key '{}'", i, id);
+                //println!("Scope({}) missing key '{}'", i, id);
             }
         }
     }
@@ -115,16 +113,12 @@ impl<'a> ExprVisitor<Result<Object, String>> for Resolver<'a> {
             }
         }
 
-        println!("visiting variable {:?}", name);
-
         self.resolve_local(&name.token, expr);
         return Ok(Object::Nil)
     }
 
     fn visit_assign(&mut self, expr: Expr, name: &TokenLoc, value: &Expr) -> Result<Object, String> {
-        println!("VISIT ASSIGN");
         self.resolve_expr(value);
-        println!("RESOLVING LOCAL ASSIGN EXPR");
         self.resolve_local(&name.token, expr);
         return Ok(Object::Nil);        
     }
@@ -206,9 +200,7 @@ impl<'a> StmtVisitor for Resolver<'a> {
     }
 
     fn visit_print(&mut self, expr: &Box<Expr>) -> Option<Object> {
-        //println!("RESOLVER: print start");
         self.resolve_expr(&*expr);
-        //println!("Resolver: print end");
         return None;
     }
 
