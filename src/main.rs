@@ -64,7 +64,7 @@ impl Lox {
 }
 
 fn main() {
-    let path = "examples/counter.lox";
+    let path = "examples/class.lox";
     let mut lox = Lox::new();
 
     /*  lox.run_stmts(vec![

@@ -3,7 +3,13 @@ use crate::parser::*;
 use crate::scanner::*;
 
 
+use std::borrow::BorrowMut;
 use std::collections::HashMap;
+
+pub enum FunctionType {
+    METHOD,
+    FUNCTION
+}
 
 #[derive(Debug)]
 pub struct Resolver<'a> {
@@ -78,6 +84,7 @@ impl<'a> Resolver<'a> {
 
     fn resolve_local(&mut self, id: &Token, expr: Expr) {
         let id = if let Token::Identifier(id) = id.clone() { id }
+        else if let Token::THIS = id.clone() { "this".to_string() }
         else { panic!("resolver::resolve_local on non-Identifier token: {:?}", id) };
         
         for i in  (0 .. self.scopes.len()).rev() {
@@ -90,7 +97,7 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn resolve_fn(&mut self, name: &TokenLoc, params: &Vec<TokenLoc>, body: &Stmt) {
+    fn resolve_fn(&mut self, name: &TokenLoc, params: &Vec<TokenLoc>, body: &Stmt, fn_type: FunctionType) {
         self.begin_scope();
         for param in params { 
             self.declare(param.token.clone());
@@ -159,6 +166,22 @@ impl<'a> ExprVisitor<Result<Object, String>> for Resolver<'a> {
         return Ok(Object::Nil);
     }
 
+    fn visit_get(&mut self, expr: Expr, object: &Box<Expr>, name: &TokenLoc) -> Result<Object, String> {
+        self.resolve_expr(&*object);
+        return Ok(Object::Nil);
+    }
+
+    fn visit_set(&mut self, expr: Expr, object: &Box<Expr>, name: &TokenLoc, value: &Box<Expr>) -> Result<Object, String> {
+        self.resolve_expr(&*value);
+        self.resolve_expr(&*object);
+        return Ok(Object::Nil);
+    }
+
+    fn visit_this(&mut self, expr: Expr, token: &TokenLoc) -> Result<Object, String> {
+        self.resolve_local(&token.token, expr);
+        return Ok(Object::Nil);
+    }
+
 }
 
 impl<'a> StmtVisitor for Resolver<'a> {
@@ -189,7 +212,7 @@ impl<'a> StmtVisitor for Resolver<'a> {
         ) -> Option<Object> {
         self.declare(name.token.clone());
         self.define(name.token.clone());
-        self.resolve_fn(name, params, body);
+        self.resolve_fn(name, params, body, FunctionType::FUNCTION);
 
         return None;
     }
@@ -228,6 +251,26 @@ impl<'a> StmtVisitor for Resolver<'a> {
         if let Some(else_stmt) = else_stmt {
             self.resolve_stmt(&**else_stmt);
         }
+
+        return None;
+    }
+
+    fn visit_class(&mut self, name: &TokenLoc, methods: &Vec<Stmt>) -> Option<Object> {
+        self.declare(name.token.clone());
+        self.define(name.token.clone());
+
+        self.begin_scope();
+        self.scopes.last_mut().unwrap().insert("this".to_string(), true); 
+
+        for stmt in methods {
+            if let Stmt::Function(name, params, body) = stmt {
+                self.resolve_fn(name, params, body, FunctionType::METHOD)
+            } else {
+                eprint!("resolver::visit_class: method parameter to fn {} not of Stmt::Function-variant; {:?}", name.token, stmt);
+            }            
+        }
+
+        self.end_scope();
 
         return None;
     }

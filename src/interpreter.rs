@@ -5,15 +5,16 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use std::iter::Cloned;
 use std::rc::Rc;
 
 use rand::Rng;
+use std::cmp::Ordering;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::cmp::Ordering;
 
-use crate::parser::*;
 use crate::scanner::*;
+use crate::{parser::*, FunctionType};
 
 // this is not a Box<dyn Callable> because those can't be easily cloned
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -31,20 +32,61 @@ impl Callable {
     }
 }
 
+fn object_type(obj: &Object) -> &'static str {
+    match obj {
+        Object::String(_) => "String",
+        Object::Number(_) => "Number",
+        Object::Boolean(_) => "Boolean",
+        Object::Callable(_) => "Function",
+        Object::Class(_) => "Class",
+        Object::Instance(_) => "Instance",
+        Object::Nil => "Nil",
+    }
+}
+
+fn print_environment(env: &Rc<RefCell<Environment>>, prefix: String, is_last: bool) {
+    let env_borrow = env.borrow();
+
+    let (current_prefix, child_prefix) = if is_last {
+        ("└── ", "    ")
+    } else {
+        ("├── ", "|   ")
+    };
+
+    println!("{}{}Environment UID = {}", prefix, current_prefix, env_borrow.uid);
+
+    if !env_borrow.values.is_empty() {
+        for (key, value) in env_borrow.values.iter() {
+            let type_str = object_type(value);
+            println!("{}{}{}: {}", prefix, child_prefix, key, type_str);
+        }
+    } else {
+        println!("{}{}(no keys)", prefix, child_prefix);
+    }
+
+    if let Some(ref enclosing) = env_borrow.enclosing {
+        let new_prefix = format!("{}{}", prefix, child_prefix);
+        print_environment(enclosing, new_prefix, true);
+    }
+}
+
+
 #[derive(Debug, Clone)]
 pub struct LoxFunction {
     // this should contain the declaration
     name: Option<String>,
     declaration: Box<Stmt>,
     params: Vec<TokenLoc>,
-    closure: Environment,
+    closure: Rc<RefCell<Environment>>,
     // does this thing need its own environment/closure?
     is_method: bool,
 }
 
 impl PartialEq for LoxFunction {
     fn eq(&self, other: &Self) -> bool {
-        self.name == other.name && self.params == other.params && &self.declaration == &other.declaration
+        self.name == other.name
+            && self.params == other.params
+            && &self.declaration == &other.declaration
     }
 }
 
@@ -59,7 +101,6 @@ impl Hash for LoxFunction {
     }
 }
 
-
 impl LoxFunction {
     fn arity(&self) -> usize {
         self.params.len()
@@ -72,19 +113,20 @@ impl LoxFunction {
             "invoking function {:?} IN ENV {} with params {:?}; env:",
             self.name, env.uid, args
         );*/
-    
 
         for (k, v) in self.params.iter().zip(args.iter()) {
             if let Token::Identifier(name) = &k.token {
-                let _ = env.define(name.clone(), v.clone());
+                let _ = env.borrow_mut().define(name.clone(), v.clone());
             } else {
-                panic!("LoxFunction::invoke assigning non-identifier {:?} as param name", k);
+                panic!(
+                    "LoxFunction::invoke assigning non-identifier {:?} as param name",
+                    k
+                );
             }
             //println!("binding {} == {}", k, v);
-            
         }
         //println!("executing function {} with declaration {:?}", self.name.clone().unwrap(), self.declaration);
-        interpreter.execute_block(&vec![*self.declaration.clone()], Rc::new(RefCell::new(env)))
+        interpreter.execute_block(&vec![*self.declaration.clone()], env)
         // TODO: correct environment
     }
 
@@ -92,7 +134,7 @@ impl LoxFunction {
         name: Option<String>,
         params: &Vec<TokenLoc>,
         body: &Box<Stmt>,
-        closure: Environment,
+        closure: Rc<RefCell<Environment>>,
     ) -> Self {
         LoxFunction {
             name: name,
@@ -102,6 +144,13 @@ impl LoxFunction {
             closure: closure,
         }
     }
+
+    /* we don't bind stuff because loxinstance.bind() would need a refcell 
+     pub fn bind(&self, instance: Rc<RefCell<LoxInstance>>) -> LoxFunction {
+        let mut env = self.closure.clone(); // todo, this is probably bad :x because I'm cloning the closure and modifying that rahter than keeping it in the Rc chain.
+        env.define("this".to_string(), Object::Instance(instance));
+        return LoxFunction::new(self.name.clone(), &self.params, &self.declaration, env);
+    } */
 }
 
 #[derive(Debug, Clone)]
@@ -137,12 +186,85 @@ impl Hash for NativeFunction {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoxClass {
+    name: String,
+    methods: HashMap<String, LoxFunction>,
+}
+
+impl LoxClass {
+    pub fn new(name: String, methods: HashMap<String, LoxFunction>) -> Self {
+        LoxClass {
+            name: name,
+            methods: methods,
+        }
+    }
+}
+
+impl Hash for LoxClass {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.name.hash(state);
+
+        for (k, v) in &self.methods {
+            k.hash(state);
+            v.hash(state);
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoxInstance {
+    loc: TokenLoc,
+    class: LoxClass,
+    fields: HashMap<String, Object>,
+}
+
+impl Hash for LoxInstance {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.class.hash(state);
+
+        for (k, v) in &self.fields {
+            k.hash(state);
+            v.hash(state);
+        }
+    }
+}
+
+impl LoxInstance {
+    pub fn new(class: LoxClass, loc: TokenLoc) -> Self {
+        LoxInstance {
+            loc: loc,
+            class: class,
+            fields: HashMap::new(),
+        }
+    }
+
+    pub fn get(&self, name: &String) -> Option<Object> {
+        if let Some(funct) = self.class.methods.get(name) {
+            let mut funct = funct.clone();
+            let mut env = Environment::with_enclosing(funct.closure.clone());  // bug: we need an enclose!!
+            // bug: LoxInstance will not refer to the same instance over mutliple calls
+            env.borrow_mut().define("this".to_string(), Object::Instance(Rc::new(RefCell::new(self.clone()))));
+            println!("defined this");
+            print_environment(&env, "".to_string(), true);
+            //panic!("env->this: {:?}", env.borrow().get(&"this".to_string())); // there seems to be an overflow happening here because of a cyclical reference?
+
+            funct.closure = env;
+            return Some(Object::Callable(Callable::Lox(funct)));
+        }
+
+        return self.fields.get(name).cloned();
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Object {
     String(String),
     Number(f64),
     Boolean(bool),
-    Callable(Callable),
+    Callable(Callable), // is "Function" a better name?
+    Class(LoxClass),
+    Instance(Rc<RefCell<LoxInstance>>),
     Nil,
 }
 
@@ -166,18 +288,24 @@ impl Hash for Object {
         match self {
             Object::String(s) => {
                 s.hash(state);
-            },
+            }
             Object::Number(n) => {
                 // Use the wrapper strategy indirectly for f64
                 n.to_bits().hash(state);
-            },
+            }
             Object::Boolean(b) => {
                 b.hash(state);
-            },
+            }
             Object::Callable(c) => {
                 // Assuming Callable implements Hash
                 c.hash(state);
-            },
+            }
+            Object::Class(k) => {
+                k.hash(state);
+            }
+            Object::Instance(i) => {
+                i.borrow().hash(state);
+            }
             Object::Nil => {
                 // Just use a constant value to represent Nil
                 0.hash(state);
@@ -206,6 +334,8 @@ impl std::fmt::Display for Object {
                     )
                 )
             }
+            Object::Class(k) => write!(f, "{}", k.name),
+            Object::Instance(i) => write!(f, "InstanceOf({})", i.borrow().class.name),
             Object::Nil => write!(f, "nil"),
         }
     }
@@ -235,9 +365,24 @@ pub trait ExprVisitor<T> {
     fn visit_logical(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> T;
     fn visit_grouping(&mut self, expr: &Expr) -> T;
     fn visit_variable(&mut self, expr: Expr, name: &TokenLoc) -> T; // TODO: I don't want to copy variables on every use.
-                                                      // this may mean wrapping them in RCs?  Do we even need ExprVisitor to be generic?,
+                                                                    // this may mean wrapping them in RCs?  Do we even need ExprVisitor to be generic?,
     fn visit_assign(&mut self, expr: Expr, name: &TokenLoc, value: &Expr) -> T;
-    fn visit_call(&mut self, expr: Expr, callee: &Box<Expr>, paren: &TokenLoc, args: &Vec<Expr>) -> T;
+    fn visit_call(
+        &mut self,
+        expr: Expr,
+        callee: &Box<Expr>,
+        paren: &TokenLoc,
+        args: &Vec<Expr>,
+    ) -> T;
+    fn visit_get(&mut self, expr: Expr, object: &Box<Expr>, name: &TokenLoc) -> T;
+    fn visit_set(
+        &mut self,
+        expr: Expr,
+        object: &Box<Expr>,
+        name: &TokenLoc,
+        value: &Box<Expr>,
+    ) -> T;
+    fn visit_this(&mut self, expr: Expr, token: &TokenLoc) -> T;
 }
 
 // QUEST: in hindsight, it probably makes more sense to clone these and pass them down
@@ -255,6 +400,7 @@ pub trait StmtVisitor {
     fn visit_while(&mut self, condition: &Box<Expr>, body: &Box<Stmt>) -> Option<Object>;
     fn visit_var(&mut self, name: &TokenLoc, initializer: &Option<Box<Expr>>) -> Option<Object>;
     fn visit_block(&mut self, stmts: &Vec<Stmt>) -> Option<Object>; // hack: passing objects to support return values.
+    fn visit_class(&mut self, name: &TokenLoc, methods: &Vec<Stmt>) -> Option<Object>;
     fn visit_function(
         &mut self,
         name: &TokenLoc,
@@ -370,15 +516,23 @@ impl Environment {
     }
 
     pub fn get_at(&self, distance: usize, name: &String) -> Option<Object> {
+        //println!("::get_at, retrieving {} at dist {} from environment:", name, distance);
+        let distance = if name == &"this".to_string() { distance - 1 } else { distance }; // HACKFIX: very dirty!
+        //print_environment(&self.ancestor(distance), "ga>> ".to_string(), true);
         return self.ancestor(distance).borrow().get(name).ok();
     }
 
     fn ancestor(&self, distance: usize) -> Rc<RefCell<Environment>> {
         let mut env = Rc::new(RefCell::new(self.clone()));
 
-        for i in 0 .. distance {
+        for i in 0..distance {
             let next_env = {
                 let benv = env.borrow();
+
+                if benv.enclosing.is_none() {
+                    eprintln!("!!! environment::ancestor: enclosing environment is None, current env: {:?}", benv);
+                }
+
                 benv.enclosing.clone().unwrap() // we're cloning the Rc, not the env
             };
             env = next_env;
@@ -389,7 +543,6 @@ impl Environment {
     }
 
     fn assign_at(&mut self, distance: usize, name: String, value: Object) {
-
         let ans = self.ancestor(distance);
         let mut bans = ans.borrow_mut();
         //println!("assigning {} at depth {} into {:?}", name, distance, bans);
@@ -414,114 +567,7 @@ impl Environment {
 
 pub struct AstPrinter;
 
-impl ExprVisitor<String> for AstPrinter {
-    fn visit_binary(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> String {
-        self.parenthesize(format!("{:?}", op), &[left, right])
-    }
-
-    fn visit_unary(&mut self, expr: Expr, op: &TokenLoc, right: &Expr) -> String {
-        self.parenthesize(format!("{:?}", op), &[right])
-    }
-
-    fn visit_grouping(&mut self, expr: &Expr) -> String {
-        self.parenthesize("group".to_string(), &[expr])
-    }
-
-    fn visit_literal(&mut self, expr: Expr, value: &Object) -> String {
-        value.to_string()
-    }
-
-    fn visit_logical(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> String {
-        self.parenthesize(format!("{:?}", op), &[left, right])
-    }
-
-    fn visit_variable(&mut self, expr: Expr, name: &TokenLoc) -> String {
-        format!("{:?}", name)
-    }
-
-    fn visit_assign(&mut self, expr: Expr, name: &TokenLoc, value: &Expr) -> String {
-        self.parenthesize(format!("assign {:?}", name), &[value])
-    }
-
-    fn visit_call(&mut self, expr: Expr, callee: &Box<Expr>, paren: &TokenLoc, args: &Vec<Expr>) -> String {
-        let args: Vec<_> = args.iter().collect();
-        if let Expr::Call(callee, paren, args) = (*callee.clone()) {};
-
-        let c = callee.visit(self);
-        self.parenthesize(format!("call {}", c), &args)
-    }
-}
-
-impl StmtVisitor for AstPrinter {
-    fn visit_expression(&mut self, expr: &Box<Expr>) -> Option<Object> {
-        expr.visit(self);
-        None
-    }
-
-    fn visit_print(&mut self, expr: &Box<Expr>) -> Option<Object> {
-        expr.visit(self);
-        None
-    }
-
-    fn visit_var(&mut self, name: &TokenLoc, initializer: &Option<Box<Expr>>) -> Option<Object> {
-        initializer.clone().unwrap_or(Box::new(Expr::Literal(Object::String("!this var has no initializer!".to_string())))).visit(self);
-        None
-    }
-
-    fn visit_block(&mut self, stmts: &Vec<Stmt>) -> Option<Object> {
-        for s in stmts {
-            s.visit(self);
-        }
-        None
-    }
-
-    fn visit_if(
-        &mut self,
-        condition: &Box<Expr>,
-        if_stmt: &Box<Stmt>,
-        else_stmt: &Option<Box<Stmt>>,
-    ) -> Option<Object> {
-        condition.visit(self);
-        None
-    }
-
-    fn visit_while(&mut self, condition: &Box<Expr>, body: &Box<Stmt>) -> Option<Object> {
-        condition.visit(self);
-        None
-    }
-
-    fn visit_function(
-        &mut self,
-        name: &TokenLoc,
-        params: &Vec<TokenLoc>,
-        body: &Box<Stmt>,
-    ) -> Option<Object> {
-        body.visit(self);
-        None
-    }
-
-    fn visit_return(&mut self, keyword: &TokenLoc, value: &Box<Expr>) -> Option<Object> {
-        value.visit(self);
-        None
-    }
-}
-
 impl AstPrinter {
-    fn parenthesize(&mut self, name: String, exprs: &[&Expr]) -> String {
-        let mut s = String::new();
-        s.push('(');
-        s.push_str(&name);
-
-        for expr in exprs {
-            s.push(' ');
-            s.push_str(&expr.visit(self));
-        }
-
-        s.push(')');
-
-        return s;
-    }
-
     pub fn print(&mut self, stmts: &Vec<Stmt>) {
         println!("===============--AST--=============");
         for s in stmts {
@@ -666,7 +712,8 @@ impl Interpreter {
         let dist = self.locals.get(expr);
         let name = match &name.token {
             Token::Identifier(name) => name.clone(),
-            e => format!("{:?}", e)
+            Token::THIS => "this".to_string(),
+            e => format!("{:?}", e),
         };
         //print!("looking up {} through expr {:?} at dist {:?}: ", name, expr, dist);
 
@@ -687,7 +734,13 @@ impl Interpreter {
 }
 
 impl ExprVisitor<Result<Object, String>> for Interpreter {
-    fn visit_binary(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> Result<Object, String> {
+    fn visit_binary(
+        &mut self,
+        expr: Expr,
+        left: &Expr,
+        op: &TokenLoc,
+        right: &Expr,
+    ) -> Result<Object, String> {
         let left = self.evaluate(left)?;
         let right = self.evaluate(right)?;
 
@@ -753,7 +806,13 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
         Ok(value.clone()) // todo: does this eat memory?
     }
 
-    fn visit_logical(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> Result<Object, String> {
+    fn visit_logical(
+        &mut self,
+        expr: Expr,
+        left: &Expr,
+        op: &TokenLoc,
+        right: &Expr,
+    ) -> Result<Object, String> {
         let lobj = self.evaluate(left)?;
 
         println!("{};evaluated l-expr: {}, op: {}", left, lobj, &op.token);
@@ -773,22 +832,33 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
 
     fn visit_variable(&mut self, expr: Expr, name: &TokenLoc) -> Result<Object, String> {
         //self.env.borrow().get(name)
-        self.lookup_var(&expr, name).ok_or(format!("err while looking up var {:?} in visit_variable in env: {:#?}", name, "cuck")) //self.env))
+        self.lookup_var(&expr, name).ok_or(format!(
+            "err while looking up var {:?} in visit_variable in env: {:#?}",
+            name, "cuck"
+        )) //self.env))
     }
 
-    fn visit_assign(&mut self, expr: Expr, name: &TokenLoc, value: &Expr) -> Result<Object, String> {
+    fn visit_assign(
+        &mut self,
+        expr: Expr,
+        name: &TokenLoc,
+        value: &Expr,
+    ) -> Result<Object, String> {
         let value = self.evaluate(value)?;
         let name = match &name.token {
             Token::Identifier(name) => name.clone(),
-            e => format!("{:?}", e)
+            e => format!("{:?}", e),
         };
-        
 
         if let Some(dist) = self.locals.get(&expr) {
-            self.env.borrow_mut().assign_at(*dist, name.clone(), value.clone());
+            self.env
+                .borrow_mut()
+                .assign_at(*dist, name.clone(), value.clone());
             return Ok(value); // QUEST: do we need this?  would this mean var a = (b = c); a == c?
         } else {
-            self.globals.borrow_mut().assign(name.clone(), value.clone());
+            self.globals
+                .borrow_mut()
+                .assign(name.clone(), value.clone());
             return Ok(value);
         }
 
@@ -813,10 +883,97 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
                 .invoke(self, args.unwrap())
                 .or(Some(Object::Nil))
                 .ok_or(format!("function call broke"));
+        } else if let Object::Class(k) = callee {
+            let instance = LoxInstance::new(k, paren.clone());
+            let init = instance.class.methods.get("init").map(|m| m.clone());
+            let instance = Rc::new(RefCell::new(instance));
+            if let Some(init) = init {
+                init.closure.borrow_mut().define("this".to_string(), Object::Instance(instance.clone()));
+                //println!("invoking class {} initializer", instance.class.name);
+                init.invoke(self, args?);
+            }
+            return Ok(Object::Instance(instance));
         } else {
-            return Err(format!("invalid function call: callee is not callable"));
+            eprintln!(
+                "invalid function call: callee '{:?}' is not callable",
+                callee
+            );
+            return Err(format!(
+                "invalid function call: callee '{:?}' is not callable",
+                callee
+            ));
         }
         //return Ok(Object::String(format!("fn '{:?}' with {:?} was called, but function calls are not implemented yet :3", callee, args)));
+    }
+
+    fn visit_get(
+        &mut self,
+        expr: Expr,
+        object: &Box<Expr>,
+        name: &TokenLoc,
+    ) -> Result<Object, String> {
+        let object = self.evaluate(&*object.clone())?;
+        let name = if let Token::Identifier(name) = name.token.clone() {
+            name
+        } else {
+            panic!(
+                "interpreter::visit_get, property accessor is non-Identifier token: {:?}",
+                name
+            )
+        };
+
+        if let Object::Instance(k) = object {
+            return k
+                .borrow()
+                .get(&name)
+                .map(|v| v.clone())
+                .ok_or(format!("Object does not have field {}", name));
+        }
+
+        eprintln!("Error accessing property '{}' on object {:?}", name, object);
+        return Err(format!(
+            "Error accessing property '{}' on object {:?}",
+            name, object
+        ));
+    }
+
+    fn visit_set(
+        &mut self,
+        expr: Expr,
+        object: &Box<Expr>,
+        name: &TokenLoc,
+        value: &Box<Expr>,
+    ) -> Result<Object, String> {
+        let object = self.evaluate(object.as_ref())?;
+        let name = if let Token::Identifier(name) = name.token.clone() {
+            name
+        } else {
+            panic!(
+                "interpreter::visit_set, property accessor is non-Identifier token: {:?}",
+                name
+            )
+        };
+
+        if let Object::Instance(inst) = object {
+            // TODO: why does this not mutate the instance directly?
+            // this don't look pretty but they won't let me if let != foobar :(
+            let mut inst = inst.borrow_mut();
+            let value = self.evaluate(&*value)?;
+            inst.fields.insert(name, value.clone());
+
+            return Ok(value);
+        } else {
+            eprintln!("Error accessing property '{}' on object {:?}", name, object);
+            return Err(format!(
+                "Error accessing property '{}' on object {:?}",
+                name, object
+            ));
+        }
+    }
+
+    fn visit_this(&mut self, expr: Expr, token: &TokenLoc) -> Result<Object, String> {
+        self.lookup_var(&expr, token)
+            .ok_or(format!("failed looking up 'this' in environment from expr: {:?}", expr))
     }
 }
 
@@ -842,15 +999,17 @@ impl StmtVisitor for Interpreter {
     fn visit_var(&mut self, name: &TokenLoc, initializer: &Option<Box<Expr>>) -> Option<Object> {
         // variable definition
         let value = if let Some(initializer) = initializer {
-                match self.evaluate(&initializer) {
+            match self.evaluate(&initializer) {
                 Ok(obj) => obj,
                 _ => Object::Nil,
             }
-        } else { Object::Nil };
+        } else {
+            Object::Nil
+        };
 
         let name = match &name.token {
             Token::Identifier(name) => name.clone(),
-            e => format!("{:?}", e)
+            e => format!("{:?}", e),
         };
 
         self.env.borrow_mut().define(name, value);
@@ -897,14 +1056,20 @@ impl StmtVisitor for Interpreter {
         params: &Vec<TokenLoc>,
         body: &Box<Stmt>,
     ) -> Option<Object> {
-        let name = if let Token::Identifier(name) = name.token.clone() { name }
-        else { panic!("resolver::resolve_local on non-Identifier token: {:?}", name) };
+        let name = if let Token::Identifier(name) = name.token.clone() {
+            name
+        } else {
+            panic!(
+                "interpreter::visit_function, function name is non-Identifier token: {:?}",
+                name
+            )
+        };
         let env = Environment::with_enclosing(self.env.clone())
             .borrow()
             .clone(); // TODO FIX: this clones the parent but doesn't link back to it, so any new functions defined will not be found
-        //println!("defining fn {}", name);
-        //env.print(9);
-        let func = LoxFunction::new(Some(name.clone()), params, body, env);
+                      //println!("defining fn {}", name);
+                      //env.print(9);
+        let func = LoxFunction::new(Some(name.clone()), params, body, Rc::new(RefCell::new(env)));
         self.env
             .borrow_mut()
             .define(name.clone(), Object::Callable(Callable::Lox(func)));
@@ -914,5 +1079,45 @@ impl StmtVisitor for Interpreter {
 
     fn visit_return(&mut self, keyword: &TokenLoc, value: &Box<Expr>) -> Option<Object> {
         self.evaluate(&value).ok()
+    }
+
+    fn visit_class(&mut self, name: &TokenLoc, methods: &Vec<Stmt>) -> Option<Object> {
+        let name = if let Token::Identifier(name) = name.token.clone() {
+            name
+        } else {
+            panic!(
+                "interpreter::visit_class, class name is non-Identifier token: {:?}",
+                name
+            )
+        };
+
+        let methods = methods
+            .iter()
+            .filter_map(|m| {
+                if let Stmt::Function(name, params, body) = m {
+                    let fn_name = if let Token::Identifier(name) = name.token.clone() {
+                        name
+                    } else {
+                        panic!(
+                            "interpreter::visit_class, method name is non-Identifier token: {:?}",
+                            name
+                        )
+                    }; // this is getting ridiculous...
+                    Some((
+                        fn_name.clone(),
+                        LoxFunction::new(Some(fn_name), &params, &body, self.env.clone()),
+                    )) // TODO: is cloning the current env into there a good idea?
+                } else {
+                    panic!(
+                        "interpreter::visit_class: method expr is non-function: {:?}",
+                        m
+                    );
+                }
+            })
+            .collect();
+        let klass = Object::Class(LoxClass::new(name.clone(), methods));
+        self.env.borrow_mut().define(name.clone(), klass);
+
+        return None;
     }
 }

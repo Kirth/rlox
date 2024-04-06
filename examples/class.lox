@@ -1,0 +1,17 @@
+class Waffle {
+    init() {
+        return false;
+        print "initializing waffle!";
+        print "can I mutate myself??";
+        this.color = "brown";
+        print "my color is " + this.color;
+    }
+    eat(condiment) {
+        print "I eat my Waffle with " + condiment;
+    }
+}
+
+var w = Waffle();
+w.eat("honey");
+
+print "the colour of my waffulu is: " + w.color;
