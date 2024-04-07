@@ -255,9 +255,21 @@ impl<'a> StmtVisitor for Resolver<'a> {
         return None;
     }
 
-    fn visit_class(&mut self, name: &TokenLoc, methods: &Vec<Stmt>) -> Option<Object> {
+    fn visit_class(&mut self, name: &TokenLoc, superclass: &Option<Expr>, methods: &Vec<Stmt>) -> Option<Object> {
         self.declare(name.token.clone());
         self.define(name.token.clone());
+
+        if let Some(superclass) = superclass {
+            if let Expr::Variable(scname) = superclass {
+                let name = if let Token::Identifier(name) = name.token.clone() { name } else { panic!("resolver::visit_class: class name is not a valid identifier"); };
+                let scname = if let Token::Identifier(name) = scname.token.clone() { name } else { panic!("resolver::visit_class: superclass name is not a valid identifier"); };
+                if name == scname {
+                    eprintln!("Classes can't inherit from themselves!");
+                    return None;
+                }
+            }
+            self.resolve_expr(&superclass);
+        }
 
         self.begin_scope();
         self.scopes.last_mut().unwrap().insert("this".to_string(), true); 

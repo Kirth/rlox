@@ -1,17 +1,24 @@
-class Waffle {
+class Edible {
     init() {
-        return false;
-        print "initializing waffle!";
-        print "can I mutate myself??";
-        this.color = "brown";
-        print "my color is " + this.color;
+        this.uses = 10;
     }
+}
+
+
+class Waffle < Edible {
+    init() {
+        this.uses = 12;
+    }
+
     eat(condiment) {
-        print "I eat my Waffle with " + condiment;
+        print "I eat my " + this.uses + "th Waffle with " + condiment;
+        var uses = this.uses;
+        this.uses = uses - 1;
+        print "I have " + this.uses + " left.";
     }
 }
 
 var w = Waffle();
 w.eat("honey");
-
-print "the colour of my waffulu is: " + w.color;
+w.eat("strawberry");
+w.eat("chocolate");

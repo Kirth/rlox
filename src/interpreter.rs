@@ -189,13 +189,15 @@ impl Hash for NativeFunction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoxClass {
     name: String,
+    superclass: Option<Box<LoxClass>>,
     methods: HashMap<String, LoxFunction>,
 }
 
 impl LoxClass {
-    pub fn new(name: String, methods: HashMap<String, LoxFunction>) -> Self {
+    pub fn new(name: String, superclass: Option<Box<LoxClass>>, methods: HashMap<String, LoxFunction>) -> Self {
         LoxClass {
             name: name,
+            superclass: superclass,
             methods: methods,
         }
     }
@@ -216,14 +218,14 @@ impl Hash for LoxClass {
 pub struct LoxInstance {
     loc: TokenLoc,
     class: LoxClass,
-    fields: HashMap<String, Object>,
+    fields: Rc<RefCell<HashMap<String, Object>>>,
 }
 
 impl Hash for LoxInstance {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.class.hash(state);
 
-        for (k, v) in &self.fields {
+        for (k, v) in self.fields.borrow().iter() {
             k.hash(state);
             v.hash(state);
         }
@@ -235,25 +237,34 @@ impl LoxInstance {
         LoxInstance {
             loc: loc,
             class: class,
-            fields: HashMap::new(),
+            fields: Rc::new(RefCell::new(HashMap::new())),
         }
     }
 
     pub fn get(&self, name: &String) -> Option<Object> {
         if let Some(funct) = self.class.methods.get(name) {
             let mut funct = funct.clone();
-            let mut env = Environment::with_enclosing(funct.closure.clone());  // bug: we need an enclose!!
-            // bug: LoxInstance will not refer to the same instance over mutliple calls
-            env.borrow_mut().define("this".to_string(), Object::Instance(Rc::new(RefCell::new(self.clone()))));
-            println!("defined this");
-            print_environment(&env, "".to_string(), true);
-            //panic!("env->this: {:?}", env.borrow().get(&"this".to_string())); // there seems to be an overflow happening here because of a cyclical reference?
+            let env = Environment::with_enclosing(funct.closure.clone());
+            env.borrow_mut().define("this".to_string(), Object::Instance(self.clone())); 
+            //print_environment(&env, "".to_string(), true);
+        
 
             funct.closure = env;
             return Some(Object::Callable(Callable::Lox(funct)));
+        } else if let Some(sc) = self.class.superclass.clone() { // this is hideous :D
+            if let Some(funct) = sc.methods.get(name) {
+                let mut funct = funct.clone();
+                let env = Environment::with_enclosing(funct.closure.clone()); 
+                env.borrow_mut().define("this".to_string(), Object::Instance(self.clone()));
+                //print_environment(&env, "".to_string(), true);
+                //panic!("env->this: {:?}", env.borrow().get(&"this".to_string())); // there seems to be an overflow happening here because of a cyclical reference?
+    
+                funct.closure = env;
+                return Some(Object::Callable(Callable::Lox(funct)));
+            }
         }
 
-        return self.fields.get(name).cloned();
+        return self.fields.borrow().get(name).cloned();
     }
 }
 
@@ -264,7 +275,7 @@ pub enum Object {
     Boolean(bool),
     Callable(Callable), // is "Function" a better name?
     Class(LoxClass),
-    Instance(Rc<RefCell<LoxInstance>>),
+    Instance(LoxInstance),
     Nil,
 }
 
@@ -304,7 +315,7 @@ impl Hash for Object {
                 k.hash(state);
             }
             Object::Instance(i) => {
-                i.borrow().hash(state);
+                i.hash(state);
             }
             Object::Nil => {
                 // Just use a constant value to represent Nil
@@ -335,7 +346,7 @@ impl std::fmt::Display for Object {
                 )
             }
             Object::Class(k) => write!(f, "{}", k.name),
-            Object::Instance(i) => write!(f, "InstanceOf({})", i.borrow().class.name),
+            Object::Instance(i) => write!(f, "InstanceOf({})", i.class.name),
             Object::Nil => write!(f, "nil"),
         }
     }
@@ -400,7 +411,7 @@ pub trait StmtVisitor {
     fn visit_while(&mut self, condition: &Box<Expr>, body: &Box<Stmt>) -> Option<Object>;
     fn visit_var(&mut self, name: &TokenLoc, initializer: &Option<Box<Expr>>) -> Option<Object>;
     fn visit_block(&mut self, stmts: &Vec<Stmt>) -> Option<Object>; // hack: passing objects to support return values.
-    fn visit_class(&mut self, name: &TokenLoc, methods: &Vec<Stmt>) -> Option<Object>;
+    fn visit_class(&mut self, name: &TokenLoc, superclass: &Option<Expr>, methods: &Vec<Stmt>) -> Option<Object>;
     fn visit_function(
         &mut self,
         name: &TokenLoc,
@@ -886,7 +897,6 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
         } else if let Object::Class(k) = callee {
             let instance = LoxInstance::new(k, paren.clone());
             let init = instance.class.methods.get("init").map(|m| m.clone());
-            let instance = Rc::new(RefCell::new(instance));
             if let Some(init) = init {
                 init.closure.borrow_mut().define("this".to_string(), Object::Instance(instance.clone()));
                 //println!("invoking class {} initializer", instance.class.name);
@@ -923,8 +933,7 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
         };
 
         if let Object::Instance(k) = object {
-            return k
-                .borrow()
+            return k // bug: this.foo = this.foo + 1 returns a borrowed error
                 .get(&name)
                 .map(|v| v.clone())
                 .ok_or(format!("Object does not have field {}", name));
@@ -957,9 +966,8 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
         if let Object::Instance(inst) = object {
             // TODO: why does this not mutate the instance directly?
             // this don't look pretty but they won't let me if let != foobar :(
-            let mut inst = inst.borrow_mut();
             let value = self.evaluate(&*value)?;
-            inst.fields.insert(name, value.clone());
+            inst.fields.borrow_mut().insert(name, value.clone());
 
             return Ok(value);
         } else {
@@ -1081,15 +1089,24 @@ impl StmtVisitor for Interpreter {
         self.evaluate(&value).ok()
     }
 
-    fn visit_class(&mut self, name: &TokenLoc, methods: &Vec<Stmt>) -> Option<Object> {
-        let name = if let Token::Identifier(name) = name.token.clone() {
-            name
-        } else {
-            panic!(
-                "interpreter::visit_class, class name is non-Identifier token: {:?}",
-                name
-            )
-        };
+    fn visit_class(&mut self, name: &TokenLoc, superclass: &Option<Expr>, methods: &Vec<Stmt>) -> Option<Object> {
+        let name = if let Token::Identifier(name) = name.token.clone() { name } 
+                        else { panic!( "interpreter::visit_class, class name is non-Identifier token: {:?}", name ) };
+
+        let superclass = if let Some(superclass) = superclass {
+            let superclass = self.evaluate(superclass);
+            if superclass.is_err() { // TODO: I can do this cleaner :3
+                panic!("Error evaluating superclass for class {}", name);
+            }
+            let superclass = superclass.unwrap(); 
+
+            if let Object::Class(superclass) = superclass {
+                Some(Box::new(superclass))
+            } else {
+                panic!("Object {:?} is not a valid superclass for {}", superclass, name);
+            }
+        } else { None };
+
 
         let methods = methods
             .iter()
@@ -1115,7 +1132,7 @@ impl StmtVisitor for Interpreter {
                 }
             })
             .collect();
-        let klass = Object::Class(LoxClass::new(name.clone(), methods));
+        let klass = Object::Class(LoxClass::new(name.clone(), superclass, methods));
         self.env.borrow_mut().define(name.clone(), klass);
 
         return None;

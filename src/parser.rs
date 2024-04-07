@@ -70,7 +70,7 @@ pub enum Stmt {
     Print(Box<Expr>),
     Var(TokenLoc, Option<Box<Expr>>),
     Block(Vec<Stmt>),
-    Class(TokenLoc, Vec<Stmt>), // name, methods; TODO: having
+    Class(TokenLoc, Option<Expr>, Vec<Stmt>), // name, superclass methods;
     If(Box<Expr>, Box<Stmt>, Option<Box<Stmt>>),
     While(Box<Expr>, Box<Stmt>),
     Function(TokenLoc, Vec<TokenLoc>, Box<Stmt>),
@@ -98,8 +98,8 @@ impl std::fmt::Display for Stmt {
                 }
                 write!(f, ")")
             }
-            Stmt::Class(name, _methods) => {
-                write!(f, "Class({})", name.token)
+            Stmt::Class(name, superclass, _methods) => {
+                write!(f, "Class({} < {:?})", name.token, superclass)
             }
             Stmt::If(condition, then_branch, else_branch) => {
                 write!(f, "If({}, {}, ", condition, then_branch)?;
@@ -133,7 +133,7 @@ impl Stmt {
             Stmt::Print(e) => visitor.visit_print(e),
             Stmt::Var(name, initializer) => visitor.visit_var(name, initializer),
             Stmt::Block(stmts) => visitor.visit_block(stmts),
-            Stmt::Class(name, methods) => visitor.visit_class(name, methods),
+            Stmt::Class(name, superclass, methods) => visitor.visit_class(name, superclass, methods),
             Stmt::Function(name, params, body) => visitor.visit_function(name, params, body),
             Stmt::Return(keyword, expr) => visitor.visit_return(keyword, expr),
         }
@@ -558,6 +558,15 @@ impl Parser {
             )?
             .clone();
 
+        let superclass = if self.expect_token_type_one_of(vec![Token::LS]) {
+            self.consume(
+                &Token::Identifier("superclass_name".to_string()),
+                "Expect superclass name after <.".to_string(),
+            );
+
+            Some(Expr::Variable(self.previous().clone()))
+        } else { None };
+
         self.consume(
             &Token::LEFT_BRACE,
             "Expect '{{' before class body.".to_string(),
@@ -573,7 +582,7 @@ impl Parser {
             &Token::RIGHT_BRACE,
             "Expect '}' after class body.".to_string(),
         );
-        return Ok(Stmt::Class(name, methods));
+        return Ok(Stmt::Class(name, superclass, methods));
     }
 
     fn return_statement(&mut self) -> Result<Stmt, String> {
