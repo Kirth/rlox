@@ -53,7 +53,10 @@ fn print_environment(env: &Rc<RefCell<Environment>>, prefix: String, is_last: bo
         ("├── ", "|   ")
     };
 
-    println!("{}{}Environment UID = {}", prefix, current_prefix, env_borrow.uid);
+    println!(
+        "{}{}Environment UID = {}",
+        prefix, current_prefix, env_borrow.uid
+    );
 
     if !env_borrow.values.is_empty() {
         for (key, value) in env_borrow.values.iter() {
@@ -69,7 +72,6 @@ fn print_environment(env: &Rc<RefCell<Environment>>, prefix: String, is_last: bo
         print_environment(enclosing, new_prefix, true);
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct LoxFunction {
@@ -145,7 +147,7 @@ impl LoxFunction {
         }
     }
 
-    /* we don't bind stuff because loxinstance.bind() would need a refcell 
+    /* we don't bind stuff because loxinstance.bind() would need a refcell
      pub fn bind(&self, instance: Rc<RefCell<LoxInstance>>) -> LoxFunction {
         let mut env = self.closure.clone(); // todo, this is probably bad :x because I'm cloning the closure and modifying that rahter than keeping it in the Rc chain.
         env.define("this".to_string(), Object::Instance(instance));
@@ -194,7 +196,11 @@ pub struct LoxClass {
 }
 
 impl LoxClass {
-    pub fn new(name: String, superclass: Option<Box<LoxClass>>, methods: HashMap<String, LoxFunction>) -> Self {
+    pub fn new(
+        name: String,
+        superclass: Option<Box<LoxClass>>,
+        methods: HashMap<String, LoxFunction>,
+    ) -> Self {
         LoxClass {
             name: name,
             superclass: superclass,
@@ -245,20 +251,22 @@ impl LoxInstance {
         if let Some(funct) = self.class.methods.get(name) {
             let mut funct = funct.clone();
             let env = Environment::with_enclosing(funct.closure.clone());
-            env.borrow_mut().define("this".to_string(), Object::Instance(self.clone())); 
+            env.borrow_mut()
+                .define("this".to_string(), Object::Instance(self.clone()));
             //print_environment(&env, "".to_string(), true);
-        
 
             funct.closure = env;
             return Some(Object::Callable(Callable::Lox(funct)));
-        } else if let Some(sc) = self.class.superclass.clone() { // this is hideous :D
+        } else if let Some(sc) = self.class.superclass.clone() {
+            // this is hideous :D
             if let Some(funct) = sc.methods.get(name) {
                 let mut funct = funct.clone();
-                let env = Environment::with_enclosing(funct.closure.clone()); 
-                env.borrow_mut().define("this".to_string(), Object::Instance(self.clone()));
+                let env = Environment::with_enclosing(funct.closure.clone());
+                env.borrow_mut()
+                    .define("this".to_string(), Object::Instance(self.clone()));
                 //print_environment(&env, "".to_string(), true);
                 //panic!("env->this: {:?}", env.borrow().get(&"this".to_string())); // there seems to be an overflow happening here because of a cyclical reference?
-    
+
                 funct.closure = env;
                 return Some(Object::Callable(Callable::Lox(funct)));
             }
@@ -394,6 +402,7 @@ pub trait ExprVisitor<T> {
         value: &Box<Expr>,
     ) -> T;
     fn visit_this(&mut self, expr: Expr, token: &TokenLoc) -> T;
+    fn visit_super(&mut self, expr: Expr, token: &TokenLoc, method: &TokenLoc) -> T;
 }
 
 // QUEST: in hindsight, it probably makes more sense to clone these and pass them down
@@ -411,7 +420,12 @@ pub trait StmtVisitor {
     fn visit_while(&mut self, condition: &Box<Expr>, body: &Box<Stmt>) -> Option<Object>;
     fn visit_var(&mut self, name: &TokenLoc, initializer: &Option<Box<Expr>>) -> Option<Object>;
     fn visit_block(&mut self, stmts: &Vec<Stmt>) -> Option<Object>; // hack: passing objects to support return values.
-    fn visit_class(&mut self, name: &TokenLoc, superclass: &Option<Expr>, methods: &Vec<Stmt>) -> Option<Object>;
+    fn visit_class(
+        &mut self,
+        name: &TokenLoc,
+        superclass: &Option<Expr>,
+        methods: &Vec<Stmt>,
+    ) -> Option<Object>;
     fn visit_function(
         &mut self,
         name: &TokenLoc,
@@ -506,6 +520,7 @@ impl Environment {
     }
 
     pub fn get(&self, name: &String) -> Result<Object, String> {
+        //print_environment(&Rc::new(RefCell::new(self.clone())), "env_get>> ".to_string(), true);
         if let Some(obj) = self.values.get(name) {
             //println!("got object {} from env {}", name, self.uid);
             return Ok(obj.clone()); // TODO: don't clone
@@ -528,8 +543,12 @@ impl Environment {
 
     pub fn get_at(&self, distance: usize, name: &String) -> Option<Object> {
         //println!("::get_at, retrieving {} at dist {} from environment:", name, distance);
-        let distance = if name == &"this".to_string() { distance - 1 } else { distance }; // HACKFIX: very dirty!
-        //print_environment(&self.ancestor(distance), "ga>> ".to_string(), true);
+        let distance = if name == &"this".to_string() || name == &"super".to_string() {
+            distance - 1
+        } else {
+            distance
+        }; // HACKFIX: very dirty!
+           //print_environment(&self.ancestor(distance), "ga>> ".to_string(), true);
         return self.ancestor(distance).borrow().get(name).ok();
     }
 
@@ -541,7 +560,7 @@ impl Environment {
                 let benv = env.borrow();
 
                 if benv.enclosing.is_none() {
-                    eprintln!("!!! environment::ancestor: enclosing environment is None, current env: {:?}", benv);
+                    eprintln!("!!! environment::ancestor: enclosing environment is None, current depth i={}, aiming dist={}", i, distance);
                 }
 
                 benv.enclosing.clone().unwrap() // we're cloning the Rc, not the env
@@ -726,21 +745,19 @@ impl Interpreter {
             Token::THIS => "this".to_string(),
             e => format!("{:?}", e),
         };
-        //print!("looking up {} through expr {:?} at dist {:?}: ", name, expr, dist);
+        //println!("looking up {} through expr {:?} at dist {:?}: ", name, expr, dist);
 
-        //println!("locals: {:#?}", self.locals);
-        //println!("self_env: {:#?}", self.env);
 
         if let Some(dist) = dist {
-            //println!("==> value: {:?}", self.env.borrow().get_at(*dist, name));
-            //println!("{:#?}", self.env);
-            //println!("getting {} at dist {}: {:?}", name, dist, self.env.borrow().get_at(*dist, name));
-            //println!("{:?}", self.env.borrow().get_at(*dist, &name).is_some());
             return self.env.borrow().get_at(*dist, &name);
         } else {
-            //println!("{:?}", self.globals.borrow().get(&name).ok().is_some());
+            ///print_environment(&self.globals, "lvr.globals>>".to_string(), true);
             return self.globals.borrow().get(&name).ok();
         }
+    }
+
+    pub fn dump_environment(&self) {
+        print_environment(&self.env, "dump_env>> ".to_string(), true);
     }
 }
 
@@ -842,11 +859,9 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
     }
 
     fn visit_variable(&mut self, expr: Expr, name: &TokenLoc) -> Result<Object, String> {
-        //self.env.borrow().get(name)
         self.lookup_var(&expr, name).ok_or(format!(
-            "err while looking up var {:?} in visit_variable in env: {:#?}",
-            name, "cuck"
-        )) //self.env))
+            "err while looking up var {:?} in visit_variable", name
+        ))
     }
 
     fn visit_assign(
@@ -898,7 +913,9 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
             let instance = LoxInstance::new(k, paren.clone());
             let init = instance.class.methods.get("init").map(|m| m.clone());
             if let Some(init) = init {
-                init.closure.borrow_mut().define("this".to_string(), Object::Instance(instance.clone()));
+                init.closure
+                    .borrow_mut()
+                    .define("this".to_string(), Object::Instance(instance.clone()));
                 //println!("invoking class {} initializer", instance.class.name);
                 init.invoke(self, args?);
             }
@@ -980,8 +997,58 @@ impl ExprVisitor<Result<Object, String>> for Interpreter {
     }
 
     fn visit_this(&mut self, expr: Expr, token: &TokenLoc) -> Result<Object, String> {
-        self.lookup_var(&expr, token)
-            .ok_or(format!("failed looking up 'this' in environment from expr: {:?}", expr))
+        self.lookup_var(&expr, token).ok_or(format!(
+            "failed looking up 'this' in environment from expr: {:?}",
+            expr
+        ))
+    }
+
+    fn visit_super(
+        &mut self,
+        expr: Expr,
+        token: &TokenLoc,
+        method: &TokenLoc,
+    ) -> Result<Object, String> {
+        let distance = self.locals.get(&expr).unwrap();
+        //println!("VISIT_SUPER looking for {:?} at {}", expr, distance);
+        //print_environment(&self.env, format!("visit_super.{}>", distance), true);
+
+        let superclass = if let Object::Class(superclass) = self
+            .env
+            .borrow()
+            .get_at(*distance, &"super".to_string())
+            .ok_or("interpreter::visit_super: failed looking up super".to_string())?
+        {
+            superclass
+        } else {
+            unreachable!();
+            panic!("superclass is not a class :o");
+        };
+
+        let object = if let Object::Instance(object) = self
+            .env
+            .borrow()
+            .get_at(*distance - 1, &"this".to_string())
+            .ok_or("interpreter::visit_super: failed looking up this")?
+        {
+            object
+        } else {
+            unreachable!();
+            panic!("object is not an instance :o");
+        };
+        
+
+        let method = if let Token::Identifier(method) = method.token.clone() { method } else { panic!("interpreter::visit_super: method name is non-Identifier token variant: {:?}", method); };
+        
+
+        //println!("visit_super:looking up method {}", &format!("{}", method));
+        let method = superclass.methods.get(&method).unwrap().clone(); // TODO, is the format! a good idea? nope, that don't werk BUG
+        method.closure.borrow_mut().define("this".to_string(), Object::Instance(object));
+        
+        return Ok(Object::Callable(Callable::Lox(method)));
+        
+
+
     }
 }
 
@@ -1020,7 +1087,8 @@ impl StmtVisitor for Interpreter {
             e => format!("{:?}", e),
         };
 
-        self.env.borrow_mut().define(name, value);
+        self.env.borrow_mut().define(name.clone(), value);
+        //print_environment(&self.env, format!("visit_var:{}", name), true);
         return None;
     }
 
@@ -1089,24 +1157,46 @@ impl StmtVisitor for Interpreter {
         self.evaluate(&value).ok()
     }
 
-    fn visit_class(&mut self, name: &TokenLoc, superclass: &Option<Expr>, methods: &Vec<Stmt>) -> Option<Object> {
-        let name = if let Token::Identifier(name) = name.token.clone() { name } 
-                        else { panic!( "interpreter::visit_class, class name is non-Identifier token: {:?}", name ) };
+    fn visit_class(
+        &mut self,
+        name: &TokenLoc,
+        superclass: &Option<Expr>,
+        methods: &Vec<Stmt>,
+    ) -> Option<Object> {
+        let name = if let Token::Identifier(name) = name.token.clone() {
+            name
+        } else {
+            panic!(
+                "interpreter::visit_class, class name is non-Identifier token: {:?}",
+                name
+            )
+        };
 
         let superclass = if let Some(superclass) = superclass {
             let superclass = self.evaluate(superclass);
-            if superclass.is_err() { // TODO: I can do this cleaner :3
+            if superclass.is_err() {
+                // TODO: I can do this cleaner :3
                 panic!("Error evaluating superclass for class {}", name);
             }
-            let superclass = superclass.unwrap(); 
+            let superclass = superclass.unwrap();
 
             if let Object::Class(superclass) = superclass {
                 Some(Box::new(superclass))
             } else {
-                panic!("Object {:?} is not a valid superclass for {}", superclass, name);
+                panic!(
+                    "Object {:?} is not a valid superclass for {}",
+                    superclass, name
+                );
             }
-        } else { None };
+        } else {
+            None
+        };
 
+        if superclass.is_some() {
+            let old_env = self.env.clone();
+            self.env = Environment::with_enclosing(old_env);
+            self.env.borrow_mut().define("super".to_string(), Object::Class(*superclass.clone().unwrap()));
+        }
 
         let methods = methods
             .iter()
@@ -1132,8 +1222,14 @@ impl StmtVisitor for Interpreter {
                 }
             })
             .collect();
-        let klass = Object::Class(LoxClass::new(name.clone(), superclass, methods));
-        self.env.borrow_mut().define(name.clone(), klass);
+
+        if superclass.is_some() {
+            let enclosing = self.env.borrow().enclosing.clone();
+            self.env = enclosing.unwrap();
+        }
+
+        let klass = Object::Class(LoxClass::new(name.clone(), superclass.clone(), methods));
+        self.env.borrow_mut().define(name.clone(), klass.clone());
 
         return None;
     }

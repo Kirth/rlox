@@ -19,6 +19,7 @@ pub enum Expr {
     Call(Box<Expr>, TokenLoc, Vec<Expr>),
     Get(Box<Expr>, TokenLoc),
     This(TokenLoc),
+    Super(TokenLoc, TokenLoc), // keyword, method
     Unary(TokenLoc, Box<Expr>),
     Set(Box<Expr>, TokenLoc, Box<Expr>), // object, property, value
     Literal(Object),
@@ -41,7 +42,8 @@ impl Expr {
             Expr::Call(callee, paren, args) => visitor.visit_call(self.clone(), callee, paren, args),
             Expr::Get(object, prop) => visitor.visit_get(self.clone(), object, prop),
             Expr::Set(object, prop, value) => visitor.visit_set(self.clone(), object, prop, value),
-            Expr::This(tloc) => visitor.visit_this(self.clone(), tloc)
+            Expr::This(tloc) => visitor.visit_this(self.clone(), tloc),
+            Expr::Super(tloc, method) => visitor.visit_super(self.clone(), tloc, method),
         }
     }
 }
@@ -59,7 +61,8 @@ impl std::fmt::Display for Expr {
             Expr::Call(callee, paren, args) => write!(f, "Call({}({:?}))", callee, args),
             Expr::Get(object, prop) => write!(f, "Get({}.{})", object, prop.token),
             Expr::Set(object, prop, value) => write!(f, "Set({}.{}={:?})", object, prop.token, value),
-            Expr::This(token) => write!(f, "This")
+            Expr::This(token) => write!(f, "This"),
+            Expr::Super(token, method) => write!(f, "Super.{}", method.token),
         }
     }
 }
@@ -329,6 +332,13 @@ impl Parser {
                     unreachable!("invariant failure")
                 }
             })));
+        }
+
+        if self.expect_token_type_one_of(vec![Token::SUPER]) {
+            let keyword = self.previous().clone();
+            self.consume(&Token::DOT, "Expect '.'after 'super'.".to_string());
+            let method = self.consume(&Token::Identifier("method_name".to_string()), "Expect superclass method name.".to_string())?;
+            return Ok(Box::new(Expr::Super(keyword.clone(), method.clone())));
         }
 
         if self.expect_token_type_one_of(vec![Token::THIS]) {

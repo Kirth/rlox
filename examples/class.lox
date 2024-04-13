@@ -1,16 +1,28 @@
 class Edible {
     init() {
+        print "Edible init was run!";
         this.uses = 10;
+    }
+
+    eat() {
+        print "Om nom!";
+    }
+
+    smell() {
+        print "Sniff sniff";
     }
 }
 
 
 class Waffle < Edible {
     init() {
+        print "A Waffle materialized in the universe!";
         this.uses = 12;
     }
 
     eat(condiment) {
+        super.smell();
+        super.eat();
         print "I eat my " + this.uses + "th Waffle with " + condiment;
         var uses = this.uses;
         this.uses = uses - 1;
@@ -18,7 +30,24 @@ class Waffle < Edible {
     }
 }
 
+class Dougnut < Edible {
+    init(flavour) {
+        print "A " + flavour + " Dougnut materialized in the universe!";
+        this.flavour = flavour;
+    }
+
+    eat() {
+        super.eat();
+        print "I take a bite from the infinite " + this.flavour + " Dougnut";
+    }
+}
+
+print Waffle;
 var w = Waffle();
+print "made a new waffle!";
 w.eat("honey");
 w.eat("strawberry");
 w.eat("chocolate");
+
+var d = Dougnut("chocolate");
+d.eat();

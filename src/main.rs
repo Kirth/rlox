@@ -60,6 +60,8 @@ impl Lox {
                 print!("Error while parsing: {}", s)
             }
         }
+
+        self.interpreter.dump_environment();
     }
 }
 

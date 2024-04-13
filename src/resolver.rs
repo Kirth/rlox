@@ -85,6 +85,7 @@ impl<'a> Resolver<'a> {
     fn resolve_local(&mut self, id: &Token, expr: Expr) {
         let id = if let Token::Identifier(id) = id.clone() { id }
         else if let Token::THIS = id.clone() { "this".to_string() }
+        else if let Token::SUPER = id.clone() { "super".to_string() }
         else { panic!("resolver::resolve_local on non-Identifier token: {:?}", id) };
         
         for i in  (0 .. self.scopes.len()).rev() {
@@ -182,6 +183,11 @@ impl<'a> ExprVisitor<Result<Object, String>> for Resolver<'a> {
         return Ok(Object::Nil);
     }
 
+    fn visit_super(&mut self, expr: Expr, token: &TokenLoc, method: &TokenLoc) -> Result<Object, String> {
+        self.resolve_local(&token.token, expr);
+        return Ok(Object::Nil);
+    }
+
 }
 
 impl<'a> StmtVisitor for Resolver<'a> {
@@ -271,6 +277,11 @@ impl<'a> StmtVisitor for Resolver<'a> {
             self.resolve_expr(&superclass);
         }
 
+        if superclass.is_some() {
+            self.begin_scope();
+            self.scopes.last_mut().unwrap().insert("super".to_string(), true); // todo: error handling?
+        }
+
         self.begin_scope();
         self.scopes.last_mut().unwrap().insert("this".to_string(), true); 
 
@@ -283,6 +294,10 @@ impl<'a> StmtVisitor for Resolver<'a> {
         }
 
         self.end_scope();
+
+        if superclass.is_some() {
+            self.end_scope();
+        }
 
         return None;
     }
