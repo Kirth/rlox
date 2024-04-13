@@ -757,7 +757,7 @@ impl Interpreter {
     }
 
     pub fn dump_environment(&self) {
-        print_environment(&self.env, "dump_env>> ".to_string(), true);
+        print_environment(&self.env, ">> ".to_string(), true);
     }
 }
 

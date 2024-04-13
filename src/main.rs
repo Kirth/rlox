@@ -14,6 +14,9 @@ use crate::parser::*;
 use crate::scanner::*;
 use crate::resolver::*;
 
+use clap::{App, Arg};
+use std::io::{self, Write};
+
 struct Lox {
     had_error: bool,
     interpreter: Interpreter,
@@ -48,8 +51,8 @@ impl Lox {
 
         match stmts {
             Ok(stmts) => {
-                let mut printer = AstPrinter {};
-                printer.print(&stmts);
+                //let mut printer = AstPrinter {};
+                //printer.print(&stmts);
 
                 let mut resolver = Resolver::new(&mut self.interpreter);
                 resolver.resolve_stmts(&stmts);
@@ -60,34 +63,69 @@ impl Lox {
                 print!("Error while parsing: {}", s)
             }
         }
-
-        self.interpreter.dump_environment();
     }
 }
 
 fn main() {
-    let path = "examples/class.lox";
+    let matches = App::new("rlox")
+                        .about("Rust port of the Lox programming language (see craftinginterpreters.com)")
+                        .arg(Arg::new("script_path")
+                                .index(1)
+                                .required(false)
+                                .help(".lox script file to execute"))
+                        .arg(Arg::new("persist")
+                                .short('p')
+                                .long("persist")
+                                .required(false)
+                                .takes_value(false)
+                                .help("get a REPL after executing a script file")) // TODO :)
+                        .get_matches();
+
     let mut lox = Lox::new();
-
-    /*  lox.run_stmts(vec![
-        Stmt::Print(Box::new(Expr::Literal(Object::String("Hello world!".to_string()))))
-    ]); */
-
-    match std::fs::read_to_string(path) {
-        Ok(script) => {
-            println!(
-                "running script:\n{}\n=======================================",
-                &script
-            );
-            lox.run(script);
-            // if parse/input error exit 65
-            // if runtime error exit 70
-        }
-        Err(e) => {
-            eprintln!("Failed to read file: {}", e);
-            std::process::exit(2);
+    if let Some(path) = matches.value_of("script_path") {
+        match std::fs::read_to_string(path) {
+            Ok(script) => {
+                /*println!(
+                    "running script:\n{}\n=======================================",
+                    &script
+                );*/
+                lox.run(script);
+                // if parse/input error exit 65
+                // if runtime error exit 70
+            }
+            Err(e) => {
+                eprintln!("Failed to read file: {}", e);
+                std::process::exit(2);
+            }
         }
     }
+    
+    if matches.is_present("persist") || !matches.is_present("script_path") {
+        let mut input = String::new();
+        loop {
+            input.clear();
+            print!("lox> ");
+            io::stdout().flush().unwrap();
 
+            match io::stdin().read_line(&mut input) {
+                Ok(0) | Err(_) => { // Ctrl+D or read error
+                    println!("Exiting REPL...");
+                    break;
+                }
+
+                Ok(_) => {
+                    let trimmed = input.trim();
+
+                    if trimmed == "exit" {
+                        println!("Exiting REPL...");
+                        break;
+                    }
+
+                    lox.run(trimmed.to_string());
+                }
+            }
+        }
+    }
+    
     // todo: exit 64 if it's not fed a file
 }
