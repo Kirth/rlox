@@ -159,7 +159,7 @@ impl LoxFunction {
 pub struct NativeFunction {
     name: Option<String>,
     funct: fn(&Interpreter, Vec<Object>) -> Option<Object>, // todo: better error handling?
-    params: Vec<TokenLoc>,
+    params: Vec<String>,
 }
 
 impl NativeFunction {
@@ -287,6 +287,24 @@ pub enum Object {
     Nil,
 }
 
+impl Object {
+    pub fn to_num(&self) -> Option<f64> { 
+        if let Object::Number(n) = &self {
+            return Some(*n);
+        }
+
+        if let Object::String(s) = &self {
+            return s.trim().parse::<f64>().ok();
+        }
+
+        if let Object::Boolean(b) = &self {
+            return if b == &true { Some(1.0) } else { Some(0.0) };
+        }
+
+        return None;
+    }
+}
+
 impl PartialEq for Object {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
@@ -336,7 +354,7 @@ impl Hash for Object {
 impl std::fmt::Display for Object {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Object::String(s) => write!(f, "'{}'", s),
+            Object::String(s) => write!(f, "{}", s),
             Object::Number(n) => write!(f, "{}", n),
             Object::Boolean(b) => write!(f, "{}", b),
             Object::Callable(c) => {
@@ -618,11 +636,11 @@ pub struct Interpreter {
 impl Interpreter {
     pub fn new() -> Self {
         let mut env = Environment::new();
-        /* sometimes I comment these out because it makes debugging stuff with Environments less cluttered
+        /* sometimes I comment these out because it makes debugging stuff with Environments less cluttered */
         env.define(
-            "clock".to_string(),
+            "now".to_string(),
             Object::Callable(Callable::Native(NativeFunction {
-                name: Some("<native fn: clock>".to_string()),
+                name: Some("<native fn: now>".to_string()),
                 params: vec![],
                 funct: |_, _| {
                     Some(Object::Number(
@@ -664,16 +682,77 @@ impl Interpreter {
         );
 
         env.define(
-            "debug__dump_globals".to_string(),
+            "str_replace".to_string(),
             Object::Callable(Callable::Native(NativeFunction {
-                name: Some("<native fn: debug__dump_globals>".to_string()),
+                name: Some("<native fn: str_replace>".to_string()),
+                funct: |_, params| {
+                    let src = params.get(0).unwrap().to_string();
+                    let from = params.get(1).unwrap().to_string();
+                    let to = params.get(2).unwrap().to_string();
+
+                    Some(Object::String(src.replace(&from, &to)))
+                },
+                params: vec!["source".to_string(), "from".to_string(), "to".to_string()],
+            })),
+        );
+
+        env.define(
+            "str_len".to_string(),
+            Object::Callable(Callable::Native(NativeFunction {
+                name: Some("<native fn: str_replace>".to_string()),
+                funct: |_, params| {
+                    let src = params.get(0).unwrap().to_string();
+
+                    Some(Object::Number(src.len() as f64))
+                },
+                params: vec!["source".to_string()],
+            })),
+        );
+
+        env.define(
+            "str_char_at".to_string(),
+            Object::Callable(Callable::Native(NativeFunction {
+                name: Some("<native fn: str_replace>".to_string()),
+                funct: |_, params| {
+                    let src = params.get(0).unwrap().to_string();
+                    let idx = params.get(1).unwrap().to_num().unwrap();
+
+                    Some(Object::String(match src.chars().nth(idx as usize) {
+                        Some(c) => c.to_string(),
+                        None => "".to_string()
+                    }))
+                },
+                params: vec!["source".to_string(), "idx".to_string()],
+            })),
+        );
+
+        env.define(
+            "str_contains".to_string(),
+            Object::Callable(Callable::Native(NativeFunction {
+                name: Some("<native fn: str_replace>".to_string()),
+                funct: |_, params| {
+                    let src = params.get(0).unwrap().to_string();
+                    let test = params.get(1).unwrap().to_string();
+
+                    Some(Object::Boolean(src.contains(&test)))
+                },
+                params: vec!["source".to_string(), "test".to_string()],
+            })),
+        );
+
+        
+
+        env.define(
+            "dump_environment".to_string(),
+            Object::Callable(Callable::Native(NativeFunction {
+                name: Some("<native fn: dump_environment>".to_string()),
                 params: vec![],
                 funct: |i, _| {
-                    println!("===== GLOBALS ===== \n {:#?} ======= END =======", i.globals);
+                    print_environment(&i.env, " ".to_string(), true);
                     return Some(Object::Nil);
                 }
             }))
-        );*/
+        );
 
         let env_ptr = Rc::new(RefCell::new(env));
         Interpreter {
