@@ -89,7 +89,7 @@ fn main() {
                     "running script:\n{}\n=======================================",
                     &script
                 );*/
-                lox.run(script);
+                lox.run(script.trim().to_string());
                 // if parse/input error exit 65
                 // if runtime error exit 70
             }
