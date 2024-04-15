@@ -699,7 +699,7 @@ impl Interpreter {
         env.define(
             "str_len".to_string(),
             Object::Callable(Callable::Native(NativeFunction {
-                name: Some("<native fn: str_replace>".to_string()),
+                name: Some("<native fn: str_len>".to_string()),
                 funct: |_, params| {
                     let src = params.get(0).unwrap().to_string();
 
@@ -712,7 +712,7 @@ impl Interpreter {
         env.define(
             "str_char_at".to_string(),
             Object::Callable(Callable::Native(NativeFunction {
-                name: Some("<native fn: str_replace>".to_string()),
+                name: Some("<native fn: str_char_at>".to_string()),
                 funct: |_, params| {
                     let src = params.get(0).unwrap().to_string();
                     let idx = params.get(1).unwrap().to_num().unwrap();
@@ -729,7 +729,7 @@ impl Interpreter {
         env.define(
             "str_contains".to_string(),
             Object::Callable(Callable::Native(NativeFunction {
-                name: Some("<native fn: str_replace>".to_string()),
+                name: Some("<native fn: str_contains>".to_string()),
                 funct: |_, params| {
                     let src = params.get(0).unwrap().to_string();
                     let test = params.get(1).unwrap().to_string();
@@ -740,6 +740,7 @@ impl Interpreter {
             })),
         );
 
+        
         
 
         env.define(

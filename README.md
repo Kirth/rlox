@@ -12,3 +12,7 @@ docker build -t rlox .
 ```
 docker run --rm -ti -v $(pwd)/examples:/scripts/ rlox /root/rlox /scripts/hello_world.lox
 ```
+
+```
+printf 'print str_len("Hello world!");' | docker run --rm -i rlox
+```
