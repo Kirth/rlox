@@ -9,6 +9,7 @@ RUN cargo build --release
 # Run
 FROM rust:1.74
 WORKDIR /root/
-COPY --from=builder /usr/src/rlox/target/release/rlox .
+COPY --from=builder /usr/src/rlox/target/release/interpreter .
+COPY --from=builder /usr/src/rlox/target/release/vm .
 
-CMD ["./rlox"]
+CMD ["./interpreter"]
