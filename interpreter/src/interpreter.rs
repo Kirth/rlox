@@ -1,5 +1,7 @@
 #![allow(non_camel_case_types)]
 
+use wasm_bindgen::prelude::*;
+
 // In pass 1: I will not add any extra bells and whistles to Lox
 
 use std::cell::RefCell;
@@ -14,7 +16,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use crate::scanner::*;
-use crate::{parser::*, FunctionType};
+use crate::parser::*;
 
 // this is not a Box<dyn Callable> because those can't be easily cloned
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -1138,6 +1140,28 @@ impl StmtVisitor for Interpreter {
         None
     }
 
+    #[cfg(target_arch = "wasm32")]
+    fn visit_print(&mut self, expr: &Box<Expr>) -> Option<Object> {
+
+        #[wasm_bindgen]
+        extern "C" {
+            #[wasm_bindgen(js_namespace = console)]
+            fn log(s: &str);
+        }
+
+        let value = self.evaluate(&expr);
+        log(&format!(
+            "{}",
+            match value {
+                Ok(v) => v,
+                Err(e) => Object::String(e),
+            }
+        ));
+
+        return None;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn visit_print(&mut self, expr: &Box<Expr>) -> Option<Object> {
         let value = self.evaluate(&expr);
         println!(

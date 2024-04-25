@@ -2,4 +2,7 @@
 members = [
     "interpreter",
     "vm",
+    "web",
 ]
+
+resolver = "2"

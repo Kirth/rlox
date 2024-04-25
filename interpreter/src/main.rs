@@ -17,7 +17,7 @@ use crate::resolver::*;
 use clap::{App, Arg};
 use std::io::{self, Write};
 
-struct Lox {
+pub struct Lox {
     had_error: bool,
     interpreter: Interpreter,
 }

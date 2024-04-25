@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Lox Interpreter</title>
+    <script type="module">
+        import init, { interpret } from './pkg/web.js';
+
+        async function run() {
+            await init();  // Initializes the WASM module
+            interpret("print 1+1;");  // Call your Rust function
+        }
+
+        init().then(run);
+        alert("ran");
+    </script>
+</head>
+<body>
+    <h1>WebAssembly with Rust</h1>
+</body>
+</html>
