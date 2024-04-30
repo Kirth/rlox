@@ -1,18 +1,18 @@
 #![allow(non_camel_case_types)]
 
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::prelude::*; // this is here for the web component.  
+        // the main way for the  interpreter to externalize any state or results 
+        // is by means of the print statement, which internally uses println!()
+        // for the web, rather than refactoring this thing to support externalizing responses
+        // I hacked in stuff
 
 // In pass 1: I will not add any extra bells and whistles to Lox
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-
-use std::iter::Cloned;
 use std::rc::Rc;
 
 use rand::Rng;
-use std::cmp::Ordering;
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 use crate::scanner::*;

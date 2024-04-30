@@ -3,19 +3,136 @@
 <head>
     <meta charset="UTF-8">
     <title>Lox Interpreter</title>
+    <style type="text/css">
+        .container {
+            display: flex;
+            flex-direction: row;
+            height: 90%;
+            padding: 10px;
+        }
+
+        #codeEditor, #codeOutput {
+            flex: 1;
+            border: 1px solid #ccc;
+            margin: 5px;
+            padding: 10px;
+            overflow: auto;
+            height: calc(100% - 20px); /* Adjust height to account for padding */
+        }
+
+        /* Adjust layout based on aspect ratio */
+        @media (max-aspect-ratio: 1/1) {
+            .container {
+                flex-direction: column;
+            }
+        }
+
+        button {
+            width: 100%;
+            padding: 10px;
+            font-size: 16px;
+        }
+
+        #codeEditor .monaco-scrollable-element {
+            overflow: hidden !important;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/monaco-editor@0.25.2/min/vs/loader.js"></script>
     <script type="module">
         import init, { interpret } from './pkg/web.js';
 
-        async function run() {
-            await init();  // Initializes the WASM module
-            interpret("print 1+1;");  // Call your Rust function
+        function setupLoxHighlighting() {
+            monaco.languages.register({ id: 'lox' });
+
+            // Define the keywords and tokens
+            monaco.languages.setMonarchTokensProvider('lox', {
+                tokenizer: {
+                    root: [
+                        [/\b(?:print|var|if|else|for|while|return|fun|class)\b/, "keyword"],
+                        [/[{}()\[\]]/, '@brackets'],
+                        [/[<>]=?|==?|!=?|\|\||&&|-|\+|\*|\/|%,/, 'operator'],
+                        [/\d*\.\d+([eE][-+]?\d+)?/, 'number.float'],
+                        [/\d+/, 'number'],
+                        [/"([^"\\]|\\.)*$/, 'string.invalid'],  // non-terminated string
+                        [/"/,  { token: 'string.quote', bracket: '@open', next: '@string' }],
+                        [/'/, 'string'],
+                    ],
+
+                    string: [
+                        [/[^\\"]+/,  'string'],
+                        [/\\./,      'string.escape.invalid'],
+                        [/"/,        { token: 'string.quote', bracket: '@close', next: '@pop' }]
+                    ],
+                }
+            });
+
+            // Define the editor theme to reflect these tokens
+            monaco.editor.defineTheme('loxTheme', {
+                base: 'vs-dark', // can also be vs-light or hc-black
+                inherit: true,  // inherit from base theme
+                rules: [
+                    { token: 'keyword', foreground: 'C586C0' },
+                    { token: 'number', foreground: 'B5CEA8' },
+                    { token: 'string', foreground: 'CE9178' },
+                    { token: 'operator', foreground: 'D4D4D4' }
+                ]
+            });
         }
 
-        init().then(run);
-        alert("ran");
+        function setUpMonaco() {
+            require.config({ paths: { vs: 'https://cdnjs.cloudflare.com/ajax/libs/monaco-editor/0.25.2/min/vs' }});
+
+            require(['vs/editor/editor.main'], function() {
+             //   setupLoxHighlighting();
+
+                window.editor = monaco.editor.create(document.getElementById('codeEditor'), {
+                    value: "for(var i = 0; i < 10; i = i + 1) { print i; }",
+                    language: 'javascript',
+                    theme: 'vs-dark',
+                    automaticLayout: true,
+                    scrollbar: {
+                        vertical: 'hidden',
+                        horizontal: 'hidden',
+                        verticalScrollbarSize: 0,
+                        horizontalScrollbarSize: 0
+                    },
+                    minimap: {
+                        enabled: false
+                    }
+                });
+            });
+        }
+
+        async function runCode() {
+            document.getElementById('codeOutput').textContent = "";
+            const input = window.editor.getValue();
+            await interpret(input); 
+        }
+
+        // Capture console.log outputs and display them
+        (function() {
+            const oldLog = console.log;
+            console.log = function(message) {
+                document.getElementById('codeOutput').textContent += message + '\n'; // Append new log messages
+                oldLog.apply(console, arguments);
+            };
+        })();
+
+        window.onload = async () => {
+            await init();  // Initializes the WASM module
+            setUpMonaco();
+            document.getElementById('runButton').addEventListener('click', runCode);
+        };
     </script>
 </head>
 <body>
-    <h1>WebAssembly with Rust</h1>
+    <h1>Instant rLox!</h1>
+    <div class="container">
+        <div id="codeEditor" style="height: 200px;"></div>
+        <pre id="codeOutput"></pre>
+    </div>
+    <button id="runButton">Run Code</button>
+    
+    
 </body>
 </html>
