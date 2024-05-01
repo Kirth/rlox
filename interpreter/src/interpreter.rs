@@ -305,6 +305,30 @@ impl Object {
 
         return None;
     }
+
+    pub fn is_str(&self) -> bool {
+        if let Object::String(_) = self {
+            return true;
+        }
+
+        return false;
+    }
+    pub fn is_num(&self) -> bool {
+        if let Object::Number(_) = self {
+            return true;
+        }
+
+        return false;
+    }
+
+    pub fn is_nil(&self) -> bool {
+        if let Object::Nil = self {
+            return true;
+        }
+
+        return false;
+    }
+
 }
 
 impl PartialEq for Object {
