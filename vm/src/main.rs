@@ -113,6 +113,12 @@ impl VM {
         };
     }
 
+    fn binary_operation(&mut self, op: fn(Value, Value) -> Option<Value>) -> Option<Value> {
+        let b = self.pop().unwrap(); // TODO: insufficent bla err?
+        let a = self.pop().unwrap();    
+        op(a, b)
+    }
+
     fn run(&mut self) -> Result<(), InterpretError> {
         while true {
             self.chunk.dissasemble_instruction(self.ip);
@@ -128,34 +134,37 @@ impl VM {
                     let constant = self.read_constant()?;
                     self.push(constant);                 
                 }
-                Opcode::Add => { // TODO: abstract binary_op: self.push_binary_op_result(|a, b| a + b);
-                    // TODO: support string concat
-                    let b = self.pop().unwrap(); // TODO: insufficent bla err?
-                    let a = self.pop().unwrap();
-                    let r = Value::Number(a.to_num().unwrap() + b.to_num().unwrap());
-                    println!("> {} + {} = {}", a, b, r);
-                    self.push(r)
+                Opcode::Add => { 
+                    if let Some(v) = self.binary_operation(|a, b| {
+                        if a.is_str() || b.is_str() {
+                            return Some(Value::String(format!("{}{}", a.to_string(), b.to_string())))
+                        }
+                        
+                        Some(Value::Number(a.to_num().unwrap() + b.to_num().unwrap())) 
+                    }) {
+                        self.push(v)
+                    }
                 },
                 Opcode::Subtract => { 
-                    let b = self.pop().unwrap(); // TODO: insufficent bla err?
-                    let a = self.pop().unwrap();
-                    let r= Value::Number(a.to_num().unwrap() - b.to_num().unwrap());
-                    println!("> {} - {} = {}", a, b, r);
-                    self.push(r)
+                    if let Some(v) = self.binary_operation(|a, b| {
+                        Some(Value::Number(a.to_num().unwrap() - b.to_num().unwrap())) 
+                    }) {
+                        self.push(v)
+                    }
                 },
                 Opcode::Divide => {
-                    let b = self.pop().unwrap(); // TODO: insufficent bla err?
-                    let a = self.pop().unwrap();
-                    let r = Value::Number(a.to_num().unwrap() / b.to_num().unwrap());
-                    println!("> {} / {} = {}", a, b, r);
-                    self.push(r)
+                    if let Some(v) = self.binary_operation(|a, b| {
+                        Some(Value::Number(a.to_num().unwrap() / b.to_num().unwrap())) 
+                    }) {
+                        self.push(v)
+                    }
                 },
                 Opcode::Multiply => {
-                    let b = self.pop().unwrap(); // TODO: insufficent bla err?
-                    let a = self.pop().unwrap();
-                    let r = Value::Number(a.to_num().unwrap() * b.to_num().unwrap());
-                    println!("> {} * {} = {}", a, b, r);
-                    self.push(r)
+                    if let Some(v) = self.binary_operation(|a, b| {
+                        Some(Value::Number(a.to_num().unwrap() * b.to_num().unwrap())) 
+                    }) {
+                        self.push(v)
+                    }
                 },
                 Opcode::Negate => {
                     let value = Value::Number(- self.pop().unwrap().to_num().unwrap());
@@ -248,13 +257,11 @@ impl ExprVisitor<Result<(), String>> for Compiler {
     }
 
     fn visit_literal(&mut self, expr: Expr, value: &Object) -> Result<(), String> {
-        if let Value::Number(n) = value {
-            let offset = self.chunk.emit_const_value(value.clone());
-            self.chunk.emit_const(offset);
-            return Ok(())
-        }
+        let offset = self.chunk.emit_const_value(value.clone());
+        self.chunk.emit_const(offset);
 
-        return Err(format!("Uknown Value type {:?}", value));
+        return Ok(())
+        //return Err(format!("Uknown Value type {:?}", value));
     }
 
     fn visit_logical(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> Result<(), String> {
@@ -373,21 +380,9 @@ fn compile(source: String) -> Result<Chunk, String> {
 
 fn main() {
     let mut vm = VM::new();
-    vm.chunk = compile("(5 + 5) * 2;".to_string()).unwrap();
+    vm.chunk = compile("(5 + 5) * 2 + \"foobar\";".to_string()).unwrap();
 
     println!("{:?}", vm);
-/*
-    let c = vm.chunk_add_const(Value::Number(3.0));
-    vm.chunk_write_const_op(c);
-
-    let c = vm.chunk_add_const(Value::Number(1.0));
-    vm.chunk_write_const_op(c);
-    
-    vm.chunk_write_op(Opcode::Add.into());
-    vm.chunk_write_op(Opcode::Negate.into());
-    vm.chunk_write_op(Opcode::Return.into());
- */
-    vm.trace_stack();
 
 
     let res = vm.run();
