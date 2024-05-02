@@ -30,6 +30,16 @@ pub enum Token {
     EOF, Error(String), Comment(String)
 }
 
+impl Token {
+    pub fn as_string(&self) -> Option<String> { // helper to cut down on the stupid amount of variant extraction logic I had in the interpreter
+        return match &self {
+             Token::Identifier(name) => Some(name.clone()),
+             Token::String(str) => Some(str.clone()),
+             _ => None,
+        }
+    }
+}
+
 impl PartialEq for Token {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {

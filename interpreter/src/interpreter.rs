@@ -306,7 +306,11 @@ impl Object {
         return None;
     }
 
-    pub fn is_str(&self) -> bool {
+    pub fn as_string(&self) -> Option<String> {
+        if let Object::String(s) = &self { return Some(s.clone()) } else { return None }
+    }
+
+    pub fn is_string(&self) -> bool {
         if let Object::String(_) = self {
             return true;
         }
