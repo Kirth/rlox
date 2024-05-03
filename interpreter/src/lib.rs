@@ -30,17 +30,13 @@ impl Lox {
         }
     }
 
-    fn error(line: i32, message: &str) {
+    /*fn error(line: i32, message: &str) {
         Lox::report(line, &"", message)
     }
 
     fn report(line: i32, loc: &str, msg: &str) {
         println!("[line {}] Error {}: {}", line, loc, msg)
-    }
-
-    fn run_stmts(&mut self, stmts: Vec<Stmt>) {
-        self.interpreter.interpret(stmts)
-    }
+    } */
 
     pub fn run(&mut self, source: String) {
         let scanner = Scanner::new(&source);
@@ -51,13 +47,9 @@ impl Lox {
 
         match stmts {
             Ok(stmts) => {
-                //let mut printer = AstPrinter {};
-                //printer.print(&stmts);
-
-                let mut resolver = Resolver::new(&mut self.interpreter);
-                resolver.resolve_stmts(&stmts);
-
-                self.interpreter.interpret(stmts);
+                let mut resolver = Resolver::new();
+                let locals = resolver.resolve(&stmts);
+                self.interpreter.interpret(stmts, locals);
             }
             Err(s) => {
                 print!("Error while parsing: {}", s)

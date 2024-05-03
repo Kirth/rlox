@@ -805,8 +805,9 @@ impl Interpreter {
         }
     }
 
-    pub fn interpret(&mut self, stmts: Vec<Stmt>) {
+    pub fn interpret(&mut self, stmts: Vec<Stmt>, locals: HashMap<Expr, usize>) {
         //println!("pre-interpret() overview of locals: {:#?}", self.locals);
+        self.locals = locals; // TODO: nasty hack fix to pull in the locals (rather than have them pushed in straight from the Resolver instance)
 
         for stmt in stmts {
             self.execute(&stmt); // todo: catching runtime errors?
@@ -817,11 +818,13 @@ impl Interpreter {
         stmt.visit(self)
     }
 
-    pub fn resolve(&mut self, expr: Expr, depth: usize) {
+    // TODO: fn to be cleaned up; this fn was called from resolver->interpreter
+    // to separate concerns, the resolver now generates the locals HashMap directly
+    /*ub fn resolve(&mut self, expr: Expr, depth: usize) {
         //println!("resolving {} \t\t=> {}", expr, depth);
         self.locals.insert(expr, depth);
         //println!("RESOLVE/LOCALS: {:#?}", self.locals);
-    }
+    }*/
 
     fn execute_block(
         &mut self,

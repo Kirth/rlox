@@ -5,6 +5,7 @@ use crate::scanner::*;
 
 use std::borrow::BorrowMut;
 use std::collections::HashMap;
+use std::hash::Hash;
 
 pub enum FunctionType {
     METHOD,
@@ -12,21 +13,28 @@ pub enum FunctionType {
 }
 
 #[derive(Debug)]
-pub struct Resolver<'a> {
-    interpreter: &'a mut Interpreter,
+pub struct Resolver {
+    //interpreter: &'a mut Interpreter,
+    locals: HashMap<Expr, usize>,
     scopes: Vec<HashMap<String, bool>>, // Vec is used as a Stack
 }
 
-impl<'a> Resolver<'a> {
-    pub fn new(i: &'a mut Interpreter) -> Self {
+impl Resolver {
+    pub fn new() -> Self {
         Resolver {
-            interpreter: i,
+            //interpreter: i,
+            locals: HashMap::new(),
             scopes: vec![]
         }
     }
 
     pub fn dump(&self) {
         println!("{:?}", self.scopes);
+    }
+
+    pub fn resolve(mut self, stmts: &Vec<Stmt>) -> HashMap<Expr, usize> {
+        self.resolve_stmts(stmts);
+        return self.locals;
     }
 
     pub fn resolve_stmts(&mut self, stmts: &Vec<Stmt>) {
@@ -90,7 +98,8 @@ impl<'a> Resolver<'a> {
         
         for i in  (0 .. self.scopes.len()).rev() {
             if self.scopes.get(i).unwrap().get(&id).is_some() {
-                self.interpreter.resolve(expr, self.scopes.len() - 1 -  i);
+                //self.interpreter.resolve(expr, self.scopes.len() - 1 -  i);
+                self.locals.insert(expr, self.scopes.len() - 1 - i);
                 return;
             } else {
                 //println!("Scope({}) missing key '{}'", i, id);
@@ -110,7 +119,7 @@ impl<'a> Resolver<'a> {
     }
 }
 
-impl<'a> ExprVisitor<Result<Object, String>> for Resolver<'a> {
+impl ExprVisitor<Result<Object, String>> for Resolver {
     fn visit_variable(&mut self, expr: Expr, name: &TokenLoc) -> Result<Object, String> {
         let id = if let Token::Identifier(id) = name.token.clone() { id }
         else { panic!("resolver::visit_variable on non-Identifier token: {:?}", name) }; // this is the 3rd time I repeat this in the code now, that's silly
@@ -190,7 +199,7 @@ impl<'a> ExprVisitor<Result<Object, String>> for Resolver<'a> {
 
 }
 
-impl<'a> StmtVisitor for Resolver<'a> {
+impl StmtVisitor for Resolver {
     fn visit_block(&mut self, stmts: &Vec<Stmt>) -> Option<Object> {
         self.begin_scope();
         self.resolve_stmts(stmts);
