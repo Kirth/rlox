@@ -333,6 +333,14 @@ impl Object {
         return false;
     }
 
+    pub fn is_falsey(&self) -> bool {
+        match self {
+            Object::Nil => true,
+            Object::Boolean(b) => !*b,
+            _ => true,
+        }
+    }
+
 }
 
 impl PartialEq for Object {

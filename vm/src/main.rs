@@ -39,6 +39,10 @@ enum Opcode {
     GetGlobal,
     SetLocal,
     GetLocal,
+
+    JumpIfFalse,
+    Jump
+
 }
 
 #[derive(Debug)]
@@ -69,6 +73,27 @@ impl Chunk {
     fn emit_const_value(&mut self, value: Value) -> u8 {
         self.constants.push(value);
         return (self.constants.len() - 1) as u8
+    }
+    
+    /*
+        backtracking: we don't know how long a conditional statement's body is,
+        so we don't know how far to jump at the point of emitting the JMP instr.
+        so we pour in a placeholder and return a pointer to said placeholder for the compiler to later fill in 
+    */ 
+    fn emit_jump(&mut self, op: u8) -> u16 {
+        self.emit(op);
+        self.emit(0xff);  // 16-bit offset: jump over up to 64K bytes of code
+        self.emit(0xff);
+
+        return self.instr.len() as u16 - 2;
+    }
+
+    fn patch_jump(&mut self, offset: u16) {
+        let jmp = self.instr.len() as u16 - offset - 2; // jump dest
+
+        self.instr[offset as usize] = (jmp >> 8) as u8;
+        self.instr[offset as usize + 1] = (jmp & 0xff) as u8;
+
     }
 
     fn dissasemble_instruction(&self, offset: usize) {
@@ -134,6 +159,15 @@ impl VM {
             Ok(i) => Ok(i),
             Err(e) => Err(InterpretError::COMPILE_ERR)
         };
+    }
+
+    fn read_short(&mut self) -> u16 {
+        self.ip += 2;
+
+        let high = (self.chunk.instr[self.ip - 2] as u16) << 8;
+        let low = self.chunk.instr[self.ip - 1] as u16;
+
+        return high | low;
     }
 
     fn binary_operation(&mut self, op: fn(Value, Value) -> Option<Value>) -> Option<Value> {
@@ -205,11 +239,7 @@ impl VM {
                 Opcode::Not => {
                     let value = self.pop().unwrap();
                     // todo: Interpreter::is_truthy should be an Object impl
-                    self.push(Value::Boolean(match value {
-                        Object::Nil => false,
-                        Object::Boolean(b) => b,
-                        _ => true,
-                    }));
+                    self.push(Value::Boolean(value.is_falsey()));
                 },
                 Opcode::Print => {
                     println!("{}", self.pop().unwrap());
@@ -218,12 +248,12 @@ impl VM {
                     self.binary_operation_store(|a, b| { Some(Value::Boolean(a == b)) });
                 },
                 Opcode::Less => { // TODO: coerces Num for now
+                    self.binary_operation_store(|a, b| { Some(Value::Boolean(a.to_num().unwrap() > b.to_num().unwrap())) });
+                }, // TODO: why for Less and Greater  do I need to flip the operator?
+                Opcode::Greater => { // TODO: coerces Num for now
                     self.binary_operation_store(|a, b| { Some(Value::Boolean(a.to_num().unwrap() < b.to_num().unwrap())) });
                 },
-                Opcode::Greater => { // TODO: coerces Num for now
-                    self.binary_operation_store(|a, b| { Some(Value::Boolean(a.to_num().unwrap() > b.to_num().unwrap())) });
-                },
-                Opcode::Pop => { self.pop(); },
+                Opcode::Pop => { println!("popped {:?} off the stack", self.pop()); },
                 Opcode::DefineGlobal => {
                     let name = self.read_constant()?.as_string().unwrap();
                     //println!("DefineGlobal read_constant as_string: {}", name);
@@ -249,6 +279,19 @@ impl VM {
                 Opcode::GetLocal => {
                     let slot = self.read_u8();
                     self.push(self.stack[slot as usize].clone());
+                },
+                Opcode::JumpIfFalse => {
+                    let offset = self.read_short();
+                    println!("JUMP_IF_FALSE, top of stack {:?}", self.stack.last());
+
+                    if self.stack.last().unwrap().is_falsey() {
+                        println!("jumping");
+                        self.ip += offset as usize;
+                    }
+                }
+                Opcode::Jump => {
+                    let offset = self.read_short();
+                    self.ip += offset as usize;
                 }
             }
         }
@@ -293,6 +336,11 @@ impl Compiler {
 
     fn end_scope(&mut self) {
         self.current_scope -= 1;
+
+        while self.locals.len() > 0 && self.locals[self.locals.len() - 1].1 > self.current_scope {
+            self.chunk.emit(Opcode::Pop.into());
+            self.locals.pop();
+        }
     }
 
     // resolve a (Name, ScopeDepth) tuple to a slot on the stack
@@ -336,7 +384,7 @@ impl ExprVisitor<Result<(), String>> for Compiler {
             Token::STAR => { self.chunk.emit(Opcode::Multiply.into()) },
             Token::SLASH => { self.chunk.emit(Opcode::Divide.into()) },
 
-            Token::EQ => { self.chunk.emit(Opcode::Equal.into()) },
+            Token::EQ_EQ => { self.chunk.emit(Opcode::Equal.into()) },
             Token::GT => { self.chunk.emit(Opcode::Greater.into()) },
             Token::LS => { self.chunk.emit(Opcode::Less.into()) },
 
@@ -491,7 +539,32 @@ impl StmtVisitor for Compiler {
             if_stmt: &Box<Stmt>,
             else_stmt: &Option<Box<Stmt>>,
         ) -> Option<Object> {
-        unimplemented!()
+        
+        condition.visit(self);
+
+        
+
+        let then_jmp = self.chunk.emit_jump(Opcode::JumpIfFalse.into());
+        self.chunk.emit(Opcode::Pop.into());
+        if_stmt.visit(self);
+
+
+        let else_jmp = self.chunk.emit_jump(Opcode::Jump.into());
+        
+        // we jump over the previously emitted else JMP instruction
+        self.chunk.patch_jump(then_jmp);
+        self.chunk.emit(Opcode::Pop.into());
+
+        if let Some(else_stmt) = else_stmt {
+            else_stmt.visit(self);
+        }
+
+        // we always need to patch; outside of the conditional because
+        // that only controls how many prior instructions there are to jump over
+        self.chunk.patch_jump(else_jmp);
+        
+
+        None
     }
 
     fn visit_print(&mut self, expr: &Box<Expr>) -> Option<Object> {
@@ -575,7 +648,7 @@ fn save_to_file(chunk: &Chunk, filename: &str) -> io::Result<()> {
 
 fn main() {
     let mut vm = VM::new();
-    vm.chunk = match compile("var a = 3; { var a = 5; print a - 5; } print a + 10;".to_string()) {
+    vm.chunk = match compile("var a = 5; if (5 * 2 - a * 2 == 0) { print \"Okay!\"; } else { print 5 * 2 - a * 2; }".to_string()) {
         Ok(c) => c,
         Err(s) => panic!("{}", s),
     };
@@ -588,5 +661,5 @@ fn main() {
 
     println!("{:?}", res);
 
-    save_to_file(&vm.chunk, "lox_output_program");
+    //save_to_file(&vm.chunk, "lox_output_program");
 }  
