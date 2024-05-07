@@ -2,6 +2,7 @@ use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt::format;
+use std::hash::Hash;
 
 use interpreter::interpreter::{ExprVisitor, Object, StmtVisitor};
 use interpreter::scanner::{self, *};
@@ -36,6 +37,8 @@ enum Opcode {
     DefineGlobal,
     SetGlobal,
     GetGlobal,
+    SetLocal,
+    GetLocal,
 }
 
 #[derive(Debug)]
@@ -101,6 +104,7 @@ struct VM {
     ip: usize,
     stack: Vec<Value>,
     globals: HashMap<String, Value>,
+    locals: Option<HashMap<Expr, usize>>,
     // the clox implementation has a `Value* stackTop;` pointer to the top of the stack
     // they use that as a counter for the current position.  I don't think that would work well in Rust
 }
@@ -111,7 +115,8 @@ impl VM {
             chunk: Chunk { instr: vec![], constants: vec![] },
             ip: 0,
             stack: vec![],
-            globals: HashMap::new()
+            globals: HashMap::new(),
+            locals: None,
         }
     }
 
@@ -236,6 +241,14 @@ impl VM {
                     } else {
                         eprintln!("trying to SetGlobal on a non-existant global variable {}", name);
                     }
+                },
+                Opcode::SetLocal => {
+                    let slot = self.read_u8();
+                    self.stack[slot as usize] = self.stack.last().unwrap().clone(); // todo: abstract this into `peek` already..
+                },
+                Opcode::GetLocal => {
+                    let slot = self.read_u8();
+                    self.push(self.stack[slot as usize].clone());
                 }
             }
         }
@@ -266,11 +279,32 @@ impl VM {
 }
 
 struct Compiler {
-    chunk: Chunk
+    chunk: Chunk,
+    locals: Vec<(String, usize)>,
+    current_scope: usize,
 }
 
 impl Compiler {
-    fn new() -> Self { Compiler { chunk: Chunk::new() }}
+    fn new() -> Self { Compiler { chunk: Chunk::new(), locals: Vec::new(), current_scope: 0 }}
+
+    fn begin_scope(&mut self) {
+        self.current_scope += 1;
+    }
+
+    fn end_scope(&mut self) {
+        self.current_scope -= 1;
+    }
+
+    // resolve a (Name, ScopeDepth) tuple to a slot on the stack
+    fn resolve_local(&self, scope_depth: usize, name: &str) -> Option<u8> {
+        for (i, l) in self.locals.iter().enumerate() {
+            if &l.0 == name && l.1 == scope_depth {
+                return Some(i as u8);
+            }
+        }
+
+        return None;
+    }
 }
 
 impl ExprVisitor<Result<(), String>> for Compiler {
@@ -392,13 +426,21 @@ impl ExprVisitor<Result<(), String>> for Compiler {
     }
 
     fn visit_variable(&mut self, expr: Expr, name: &TokenLoc) -> Result<(), String> {
-        for (i, c) in self.chunk.constants.iter().enumerate() {
-            if c.is_string() && c.as_string() == name.token.as_string() {
-                self.chunk.emit(Opcode::GetGlobal.into());
-                self.chunk.emit(i as u8);
-                return Ok(())
+
+        if let Some(slot) = self.resolve_local(self.current_scope, &name.token.as_string().unwrap()) {
+            self.chunk.emit(Opcode::GetLocal.into());
+            self.chunk.emit(slot);
+        } else {
+            for (i, c) in self.chunk.constants.iter().enumerate() {
+                if c.is_string() && c.as_string() == name.token.as_string() {
+                    self.chunk.emit(Opcode::GetGlobal.into());
+                    self.chunk.emit(i as u8);
+                    return Ok(())
+                }
             }
         }
+
+
 
         return Err(format!("Unknown variable name {}", name.token.as_string().unwrap()));
     }
@@ -414,7 +456,15 @@ impl StmtVisitor for Compiler {
     }
 
     fn visit_block(&mut self, stmts: &Vec<Stmt>) -> Option<Object> {
-        unimplemented!()
+        self.begin_scope();
+        
+        for stmt in stmts {
+            stmt.visit(self);
+        }
+
+        self.end_scope();
+
+        None
     }
 
     fn visit_class(
@@ -456,23 +506,39 @@ impl StmtVisitor for Compiler {
     }
 
     fn visit_var(&mut self, name: &TokenLoc, initializer: &Option<Box<Expr>>) -> Option<Object> {
-        /*
-        Global variables are looked up by name at runtime. That means the VM—the
-        bytecode interpreter loop—needs access to the name. A whole string is too big
-        to stuff into the bytecode stream as an operand. Instead, we store the string in
-        the constant table and the instruction then refers to the name by its index in the table.
-        */
 
-        let idx = self.chunk.emit_const_value(Object::String(name.token.as_string().unwrap()));
-        //println!("Emitted name {} to idx {}", name.token.as_string().unwrap(), idx);
+        if self.current_scope == 0 {
+            
 
-        match initializer {
-            Some(expr) => expr.visit(self).unwrap(),
-            None => self.chunk.emit(Opcode::Nil.into()),
+            /*
+            Global variables are looked up by name at runtime. That means the VM—the
+            bytecode interpreter loop—needs access to the name. A whole string is too big
+            to stuff into the bytecode stream as an operand. Instead, we store the string in
+            the constant table and the instruction then refers to the name by its index in the table.
+            */
+
+            let idx = self.chunk.emit_const_value(Object::String(name.token.as_string().unwrap()));
+            //println!("Emitted name {} to idx {}", name.token.as_string().unwrap(), idx);
+
+            match initializer {
+                Some(expr) => expr.visit(self).unwrap(),
+                None => self.chunk.emit(Opcode::Nil.into()),
+            }
+            
+            self.chunk.emit(Opcode::DefineGlobal.into());
+            self.chunk.emit(idx);
+        } else {
+            // locals go on the stack
+
+            match initializer {
+                Some(expr) => expr.visit(self).unwrap(),
+                None => self.chunk.emit(Opcode::Nil.into()),
+            }
+            self.locals.push((name.token.as_string().unwrap(), self.current_scope));
+
+            self.chunk.emit(Opcode::SetLocal.into());
+            self.chunk.emit((self.locals.len() - 1) as u8); // todo: this doesn't seem stable or sane
         }
-        
-        self.chunk.emit(Opcode::DefineGlobal.into());
-        self.chunk.emit(idx);
 
         None
     }
@@ -509,7 +575,7 @@ fn save_to_file(chunk: &Chunk, filename: &str) -> io::Result<()> {
 
 fn main() {
     let mut vm = VM::new();
-    vm.chunk = match compile("var breakfast = \"beignets\"; var beverage = \"cafe au lait\"; breakfast = \"beignets with \" + beverage; print breakfast;".to_string()) {
+    vm.chunk = match compile("var a = 3; { var a = 5; print a - 5; } print a + 10;".to_string()) {
         Ok(c) => c,
         Err(s) => panic!("{}", s),
     };
