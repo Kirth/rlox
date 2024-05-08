@@ -248,10 +248,10 @@ impl VM {
                     self.binary_operation_store(|a, b| { Some(Value::Boolean(a == b)) });
                 },
                 Opcode::Less => { // TODO: coerces Num for now
-                    self.binary_operation_store(|a, b| { Some(Value::Boolean(a.to_num().unwrap() > b.to_num().unwrap())) });
-                }, // TODO: why for Less and Greater  do I need to flip the operator?
-                Opcode::Greater => { // TODO: coerces Num for now
                     self.binary_operation_store(|a, b| { Some(Value::Boolean(a.to_num().unwrap() < b.to_num().unwrap())) });
+                },
+                Opcode::Greater => { // TODO: coerces Num for now
+                    self.binary_operation_store(|a, b| { Some(Value::Boolean(a.to_num().unwrap() > b.to_num().unwrap())) });
                 },
                 Opcode::Pop => { println!("popped {:?} off the stack", self.pop()); },
                 Opcode::DefineGlobal => {
@@ -440,7 +440,33 @@ impl ExprVisitor<Result<(), String>> for Compiler {
     }
 
     fn visit_logical(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> Result<(), String> {
-        unimplemented!()
+        match &op.token {
+            Token::AND => {
+                // only evaluate the RHS if the LHS is true
+                left.visit(self);
+                let end = self.chunk.emit_jump(Opcode::JumpIfFalse.into());
+                self.chunk.emit(Opcode::Pop.into());
+                right.visit(self);
+                
+                self.chunk.patch_jump(end);
+            },
+            Token::OR => {
+                left.visit(self);
+                // if the LHS is truthy, we don't evaluate the right operand
+                let else_jmp = self.chunk.emit_jump(Opcode::JumpIfFalse.into());
+                let end_jmp = self.chunk.emit_jump(Opcode::Jump.into());
+                self.chunk.patch_jump(else_jmp); // if false -> jump over the jump that avoids RHS
+                self.chunk.emit(Opcode::Pop.into());
+                right.visit(self);
+                self.chunk.patch_jump(end_jmp);
+
+            },
+            _ => {
+                return  Err(format!("Unknown logical operator '{:?}', ", op));
+            }
+        }
+
+        return Ok(())
     }
 
     fn visit_set(
@@ -648,7 +674,7 @@ fn save_to_file(chunk: &Chunk, filename: &str) -> io::Result<()> {
 
 fn main() {
     let mut vm = VM::new();
-    vm.chunk = match compile("var a = 5; if (5 * 2 - a * 2 == 0) { print \"Okay!\"; } else { print 5 * 2 - a * 2; }".to_string()) {
+    vm.chunk = match compile("if(5 < 3 or 13 < 1) { print \"Yes!\"; } else { print \"not yet!\"; }".to_string()) {
         Ok(c) => c,
         Err(s) => panic!("{}", s),
     };
