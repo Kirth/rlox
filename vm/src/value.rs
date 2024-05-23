@@ -88,6 +88,7 @@ impl std::fmt::Display for Object {
             Object::Number(n) => write!(f, "{}", n),
             Object::Boolean(b) => write!(f, "{}", b),
             Object::Nil => write!(f, "nil"),
+            Object::LoxFunction(lf) => write!(f, "LF:{}", lf.name)
         }
     }
 }

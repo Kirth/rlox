@@ -1,7 +1,8 @@
-use num_enum::{IntoPrimitive, TryFromPrimitive};
-use interpreter::parser::{Expr, Stmt};
-use crate::value::*;
 use crate::chunk::*;
+use crate::compiler::Compiler;
+use crate::value::*;
+use interpreter::parser::{Expr, Stmt};
+use num_enum::{IntoPrimitive, TryFromPrimitive};
 use std::collections::HashMap;
 
 type Value = Object;
@@ -11,7 +12,9 @@ type Value = Object;
 pub enum Opcode {
     Return,
     Constant,
-    Nil, True, False,
+    Nil,
+    True,
+    False,
 
     Print,
 
@@ -36,15 +39,23 @@ pub enum Opcode {
     JumpIfFalse,
     Jump,
     Loop, // unconditionally jumps backwards by a given offset
-
 }
-
 
 #[derive(Debug)]
 pub struct CallFrame {
     pub function: LoxFunction, // TODO: this should be a pointer (for looking up constants)
     pub ip: usize,
     pub slots: Vec<Value>,
+}
+
+impl CallFrame {
+    pub fn new(fun: LoxFunction) -> Self {
+        CallFrame {
+            function: fun,
+            ip: 0,
+            slots: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -60,7 +71,6 @@ pub struct VM {
 #[derive(Debug)]
 pub enum InterpretError {
     COMPILE_ERR,
-
 }
 
 impl VM {
@@ -95,7 +105,7 @@ impl VM {
 
         return match instr {
             Ok(i) => Ok(i),
-            Err(e) => Err(InterpretError::COMPILE_ERR)
+            Err(e) => Err(InterpretError::COMPILE_ERR),
         };
     }
 
@@ -111,14 +121,14 @@ impl VM {
 
     fn binary_operation(&mut self, op: fn(Value, Value) -> Option<Value>) -> Option<Value> {
         let b = self.pop().unwrap(); // TODO: insufficent bla err?
-        let a = self.pop().unwrap();    
+        let a = self.pop().unwrap();
         op(a, b)
     }
 
     // push the result immediately, returning false if failed
-    fn binary_operation_store(&mut self, op: fn(Value, Value) -> Option<Value>) -> bool { 
+    fn binary_operation_store(&mut self, op: fn(Value, Value) -> Option<Value>) -> bool {
         let b = self.pop().unwrap(); // TODO: insufficent bla err?
-        let a = self.pop().unwrap();    
+        let a = self.pop().unwrap();
         let res = op(a, b);
 
         if res.is_some() {
@@ -130,6 +140,28 @@ impl VM {
         return true;
     }
 
+    pub fn interpret(&mut self, source: &str) -> Result<(), InterpretError> {
+        use interpreter::parser::*;
+        use interpreter::scanner::*;
+
+        let scanner = Scanner::new(&source);
+        let tokens = scanner.scan_tokens();
+        let mut parser = Parser::new(tokens);
+        let stmts = parser.parse().expect("parser to return statements");
+        let mut compiler = Compiler::new();
+
+        println!("parsed code::\n{:?}\n\n", stmts);
+
+        for stmt in stmts {
+            stmt.visit(&mut compiler);
+        }
+
+        let cf = CallFrame::new(compiler.end_compiler());
+        self.frames.push(cf);
+
+        return self.run();
+    }
+
     pub fn run(&mut self) -> Result<(), InterpretError> {
         // interpret():
         // push the frame-with-fn to the stack
@@ -138,93 +170,116 @@ impl VM {
 
         // end-interpret;
         while true {
-            self.chunk.dissasemble_instruction(self.frame().ip);
+            self.frame()
+                .function
+                .chunk
+                .dissasemble_instruction(self.frame().ip);
+
             let instr = self.read_opcode()?;
-            
 
             match instr {
                 Opcode::Return => {
                     //println!("pop: {:?}", self.pop());
                     return Ok(());
-                },
+                }
                 Opcode::Constant => {
                     let constant = self.read_constant()?;
-                    self.push(constant);                 
-                },
+                    self.push(constant);
+                }
                 Opcode::Nil => self.push(Value::Nil),
                 Opcode::True => self.push(Value::Boolean(true)), // i guess this explains why other rlox implementations do Value::True, Value::False ;3
                 Opcode::False => self.push(Value::Boolean(false)),
-                Opcode::Add => { self.binary_operation_store(|a, b| {
-                        if a.is_string() || b.is_string() {
-                            return Some(Value::String(format!("{}{}", a.to_string(), b.to_string())))
-                        }
-                        
-                        Some(Value::Number(a.to_num().unwrap() + b.to_num().unwrap())) 
-                    });
-                },
-                Opcode::Subtract => { 
+                Opcode::Add => {
                     self.binary_operation_store(|a, b| {
-                        Some(Value::Number(a.to_num().unwrap() - b.to_num().unwrap())) 
+                        if a.is_string() || b.is_string() {
+                            return Some(Value::String(format!(
+                                "{}{}",
+                                a.to_string(),
+                                b.to_string()
+                            )));
+                        }
+
+                        Some(Value::Number(a.to_num().unwrap() + b.to_num().unwrap()))
                     });
-                },
+                }
+                Opcode::Subtract => {
+                    self.binary_operation_store(|a, b| {
+                        Some(Value::Number(a.to_num().unwrap() - b.to_num().unwrap()))
+                    });
+                }
                 Opcode::Divide => {
                     self.binary_operation_store(|a, b| {
-                        Some(Value::Number(a.to_num().unwrap() / b.to_num().unwrap())) 
+                        Some(Value::Number(a.to_num().unwrap() / b.to_num().unwrap()))
                     });
-                },
+                }
                 Opcode::Multiply => {
                     self.binary_operation_store(|a, b| {
-                        Some(Value::Number(a.to_num().unwrap() * b.to_num().unwrap())) 
+                        Some(Value::Number(a.to_num().unwrap() * b.to_num().unwrap()))
                     });
-                },
+                }
                 Opcode::Negate => {
-                    let value = Value::Number(- self.pop().unwrap().to_num().unwrap());
+                    let value = Value::Number(-self.pop().unwrap().to_num().unwrap());
                     self.push(value);
-                },
+                }
                 Opcode::Not => {
                     let value = self.pop().unwrap();
                     // todo: Interpreter::is_truthy should be an Object impl
                     self.push(Value::Boolean(value.is_falsey()));
-                },
+                }
                 Opcode::Print => {
                     println!("{}", self.pop().unwrap());
-                },
+                }
                 Opcode::Equal => {
-                    self.binary_operation_store(|a, b| { Some(Value::Boolean(a == b)) });
-                },
-                Opcode::Less => { // TODO: coerces Num for now
-                    self.binary_operation_store(|a, b| { Some(Value::Boolean(a.to_num().unwrap() < b.to_num().unwrap())) });
-                },
-                Opcode::Greater => { // TODO: coerces Num for now
-                    self.binary_operation_store(|a, b| { Some(Value::Boolean(a.to_num().unwrap() > b.to_num().unwrap())) });
-                },
-                Opcode::Pop => { println!("popped {:?} off the stack", self.pop()); },
+                    self.binary_operation_store(|a, b| Some(Value::Boolean(a == b)));
+                }
+                Opcode::Less => {
+                    // TODO: coerces Num for now
+                    self.binary_operation_store(|a, b| {
+                        Some(Value::Boolean(a.to_num().unwrap() < b.to_num().unwrap()))
+                    });
+                }
+                Opcode::Greater => {
+                    // TODO: coerces Num for now
+                    self.binary_operation_store(|a, b| {
+                        Some(Value::Boolean(a.to_num().unwrap() > b.to_num().unwrap()))
+                    });
+                }
+                Opcode::Pop => {
+                    println!("popped {:?} off the stack", self.pop());
+                }
                 Opcode::DefineGlobal => {
                     let name = self.read_constant()?.as_string().unwrap();
                     //println!("DefineGlobal read_constant as_string: {}", name);
-                    self.globals.insert(name, self.stack.last().unwrap().clone());
+                    self.globals
+                        .insert(name, self.stack.last().unwrap().clone());
                     self.pop();
-                },
+                }
                 Opcode::GetGlobal => {
                     let name = self.read_constant()?.as_string().unwrap();
                     self.push(self.globals.get(&name).unwrap().clone());
-                },
+                }
                 Opcode::SetGlobal => {
                     let name = self.read_constant()?.as_string().unwrap();
-                    if let std::collections::hash_map::Entry::Occupied(mut entry) = self.globals.entry(name.clone()) {
+                    if let std::collections::hash_map::Entry::Occupied(mut entry) =
+                        self.globals.entry(name.clone())
+                    {
                         *entry.get_mut() = self.stack.last().unwrap().clone();
                     } else {
-                        eprintln!("trying to SetGlobal on a non-existant global variable {}", name);
+                        eprintln!(
+                            "trying to SetGlobal on a non-existant global variable {}",
+                            name
+                        );
                     }
-                },
+                }
                 Opcode::SetLocal => {
                     let slot = self.read_u8();
-                    self.stack[slot as usize] = self.stack.last().unwrap().clone(); // todo: abstract this into `peek` already..
-                },
+                    self.stack[slot as usize] = self.stack.last().unwrap().clone();
+                    // todo: abstract this into `peek` already..
+                }
                 Opcode::GetLocal => {
                     let slot = self.read_u8();
                     self.push(self.stack[slot as usize].clone());
-                },
+                }
                 Opcode::JumpIfFalse => {
                     let offset = self.read_short();
                     println!("JUMP_IF_FALSE, top of stack {:?}", self.stack.last());
@@ -237,7 +292,7 @@ impl VM {
                 Opcode::Jump => {
                     let offset = self.read_short();
                     self.frame_mut().ip += offset as usize;
-                },
+                }
                 Opcode::Loop => {
                     let offset = self.read_short();
                     self.frame_mut().ip -= offset as usize;
@@ -250,8 +305,8 @@ impl VM {
 
     fn read_constant(&mut self) -> Result<Value, InterpretError> {
         let idx = self.read_u8();
-        let constant = self.chunk.constants[idx as usize].clone();
-        
+        let constant = self.frame().function.chunk.constants[idx as usize].clone();
+
         Ok(constant)
     }
 
