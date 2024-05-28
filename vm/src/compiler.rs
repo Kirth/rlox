@@ -8,13 +8,16 @@ use crate::chunk::*;
 
 type Value = crate::value::Object;
 
+#[derive(Debug)]
 pub struct Compiler {
     pub function: LoxFunctionBuilder, // the current function
     current_scope: usize,
 }
 
 impl Compiler {
-    pub fn new() -> Self { Compiler { function: LoxFunctionBuilder::new(), current_scope: 0 }}
+    pub fn new() -> Self { Compiler { function: LoxFunctionBuilder::new("root".to_string()), current_scope: 0 }}
+
+    pub fn new_inner(name: String, current_scope: usize) -> Self { Compiler { function: LoxFunctionBuilder::new(name), current_scope: current_scope }}
 
     fn begin_scope(&mut self) {
         self.current_scope += 1;
@@ -62,12 +65,8 @@ impl ExprVisitor<Result<(), String>> for Compiler {
     }
 
     fn visit_binary(&mut self, expr: Expr, left: &Expr, op: &TokenLoc, right: &Expr) -> Result<(), String> {
-        println!("visiting right expr: {:?}", left);
         left.visit(self);
-        println!("visiting left expr: {:?}", right);
         right.visit(self);
-
-        println!("with this op: {:?}", op);
 
         match &op.token {
             Token::PLUS => { self.function.chunk.emit(Opcode::Add.into()) },
@@ -92,7 +91,23 @@ impl ExprVisitor<Result<(), String>> for Compiler {
             paren: &TokenLoc,
             args: &Vec<Expr>,
         ) -> Result<(), String> {
-        unimplemented!();
+
+        callee.visit(self);
+
+        // TODO: can I abstract visit_variable into this?
+        //self.visit_variable(expr, name)
+
+        let mut argc : u8 = 0;
+
+        for arg in args {
+            arg.visit(self);
+            argc += 1;
+        }
+
+        self.function.chunk.emit(Opcode::Call.into());
+        self.function.chunk.emit(argc);
+
+        Ok(())
     }
 
     fn visit_get(&mut self, expr: Expr, object: &Box<Expr>, name: &TokenLoc) -> Result<(), String> {
@@ -221,7 +236,6 @@ impl ExprVisitor<Result<(), String>> for Compiler {
 
 impl StmtVisitor for Compiler {
     fn visit_expression(&mut self, expr: &Box<Expr>) -> Option<Object> {
-        println!("visit_expression: {:?}", expr);
         expr.visit(self);
         self.function.chunk.emit(Opcode::Pop.into()); // discard the unused result from an expression such as `brunch = "quiche"; _eat(brunch)_` off the stack
         None
@@ -255,9 +269,18 @@ impl StmtVisitor for Compiler {
             body: &Box<Stmt>,
         ) -> Option<Object> {
         
-        let mut compiler = Compiler::new();
+        let mut compiler = Compiler::new_inner(name.token.as_string().unwrap(), self.current_scope);
+
         body.visit(&mut compiler);
         let fun = compiler.end_compiler();
+        let name = fun.name.clone();
+
+        let idx1 = self.function.chunk.emit_const_value(Value::LoxFunction(fun));
+        self.function.chunk.emit_const(idx1);
+
+        let idx2 = self.function.chunk.emit_const_value(Value::String(name));
+        self.function.chunk.emit(Opcode::DefineGlobal.into());
+        self.function.chunk.emit(idx2);
 
         None
     }

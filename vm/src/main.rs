@@ -12,7 +12,7 @@ use crate::chunk::*;
 
 fn main() {
     let mut vm = VM::new();
-    let res = vm.interpret("var n = 10; var i = 0; while (i < n) { i = i + 1; print i; }");
+    let res = vm.interpret("fun b() { print \"B??\"; } fun a() { print \"A!!\"; } a();");
 
     /*
         TODO: move the compile method to the VM

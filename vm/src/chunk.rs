@@ -10,22 +10,25 @@ type Value = Object;
 pub struct LoxFunction {  // todo: good new-wrapper to replace all these pub declarations
     pub arity: usize,  
     pub chunk: Chunk,
-    pub name: String,
+    pub name: String, // Option<String>?
 }
 
+#[derive(Debug)]
 pub struct LoxFunctionBuilder {
     pub chunk: Chunk,
-    pub locals: Vec<(String, usize)>, // todo: does this also need to go in VmFunction??
+    pub locals: Vec<(String, usize)>, // todo: ??
+    pub arity: usize,
+    pub name: String, 
 }
 
 impl LoxFunctionBuilder {
-    pub fn new() -> Self { LoxFunctionBuilder { chunk: Chunk::new(), locals: Vec::new() } }
+    pub fn new(name: String) -> Self { LoxFunctionBuilder { chunk: Chunk::new(), locals: Vec::new(), arity: 0, name: name} }
 
     pub fn build(self) -> LoxFunction {
         LoxFunction {
-            arity: 0,
+            arity: self.arity,
             chunk: self.chunk,
-            name: "root".to_string(),
+            name: self.name,
         }
     }
 }

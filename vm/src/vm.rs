@@ -39,6 +39,8 @@ pub enum Opcode {
     JumpIfFalse,
     Jump,
     Loop, // unconditionally jumps backwards by a given offset
+    
+    Call,
 }
 
 #[derive(Debug)]
@@ -60,7 +62,7 @@ impl CallFrame {
 
 #[derive(Debug)]
 pub struct VM {
-    frames: Vec<CallFrame>,
+    frames: Vec<CallFrame>, // "the call stack"
     stack: Vec<Value>,
     globals: HashMap<String, Value>,
     locals: Option<HashMap<Expr, usize>>,
@@ -156,8 +158,24 @@ impl VM {
             stmt.visit(&mut compiler);
         }
 
-        let cf = CallFrame::new(compiler.end_compiler());
-        self.frames.push(cf);
+        //let cf = CallFrame::new(compiler.end_compiler()); // TODO: what if there's more call frames?  currently those get dropped
+        //self.frames.push(cf);
+
+        /*
+            24/05/2024 15:50
+            in clox we push the LoxFunction that rolls out of end_compiler() to the stack 
+            and call said function using call(function, 0);
+
+            how does that translate WRT callframes? 
+            => call(ObjFunction* function, int argCount) creates a new callframe and pushes this to the top.
+        */
+
+        let fun = compiler.end_compiler();
+        self.push(Object::LoxFunction(fun));
+        let callee = self.peek(0).unwrap().clone();
+        println!("calling {:?}", callee);
+        println!("stack: {:?}", self.stack);
+        self.callValue(callee, 0);
 
         return self.run();
     }
@@ -173,7 +191,7 @@ impl VM {
             self.frame()
                 .function
                 .chunk
-                .dissasemble_instruction(self.frame().ip);
+                .dissasemble_instruction(self.frame().ip); // TODO: frame.ip is not correctly calculated?
 
             let instr = self.read_opcode()?;
 
@@ -297,10 +315,46 @@ impl VM {
                     let offset = self.read_short();
                     self.frame_mut().ip -= offset as usize;
                 }
+                Opcode::Call => {
+                    let argc = self.read_u8();
+
+                    println!("argc: {};; stack: {:?}", argc, self.stack);
+                    // missing?? function on stack
+                    self.callValue(self.peek((argc) as usize).unwrap().clone(), argc);
+                }
             }
         }
 
         return Ok(());
+    }
+
+    fn callValue(&mut self, callee: Value, argc: u8) -> bool {
+        match callee {
+            Value::LoxFunction(lf) => {
+                // call(ObjFunction* function, int argCount) 
+                // create callframe, load it with the function, set the ip to chunk.code
+                // frame->slots = vm.stackTop - argCount - 1;
+                let ip = lf.chunk.instr.len();
+                let mut frame = CallFrame::new(lf);
+                frame.ip = 0;
+                // TODO: slots??
+
+                self.frames.push(frame);
+            },
+            e => { panic!("Can't call object {:?}", e) }
+        }
+
+        return false;
+    }
+
+    fn peek(&self, offset: usize) -> Option<&Value> {
+        println!("{} - 1 - {}", self.stack.len(), offset);
+        println!("peeking offset {}={}", offset, self.stack.len() - 1 - offset);
+        if offset > self.stack.len() {
+            return None;
+        }
+
+        self.stack.get(self.stack.len() - 1 - offset)
     }
 
     fn read_constant(&mut self) -> Result<Value, InterpretError> {
@@ -315,7 +369,10 @@ impl VM {
     }
 
     fn pop(&mut self) -> Option<Value> {
-        self.stack.pop()
+        let p = self.stack.pop();
+        println!("? popd {:?}", p);
+        //self.stack.pop()
+        p
     }
 
     fn trace_stack(&self) {
