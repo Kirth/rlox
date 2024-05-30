@@ -9,6 +9,8 @@ type Value = Object;
 
 #[repr(u8)]
 #[derive(Debug, TryFromPrimitive, IntoPrimitive, PartialEq, PartialOrd)]
+
+// I have since learned that it's better for the reader and programmer to have hardcoded these
 pub enum Opcode {
     Return,
     Constant,
@@ -47,7 +49,7 @@ pub enum Opcode {
 pub struct CallFrame {
     pub function: LoxFunction, // TODO: this should be a pointer (for looking up constants)
     pub ip: usize,
-    pub slots: Vec<Value>,
+    pub stack_start: usize, // rather than slots
 }
 
 impl CallFrame {
@@ -55,7 +57,7 @@ impl CallFrame {
         CallFrame {
             function: fun,
             ip: 0,
-            slots: Vec::new(),
+            stack_start: 0,
         }
     }
 }
@@ -198,7 +200,18 @@ impl VM {
             match instr {
                 Opcode::Return => {
                     //println!("pop: {:?}", self.pop());
-                    return Ok(());
+                    let result = self.pop().unwrap();
+
+                    //panic!("POPPED AND REPUSHING RESULT {}", result);
+
+                    self.frames.pop();
+
+                    if self.frames.len() == 0 {
+                        self.pop();
+                        return Ok(());
+                    }
+
+                    self.push(result);
                 }
                 Opcode::Constant => {
                     let constant = self.read_constant()?;
@@ -208,6 +221,8 @@ impl VM {
                 Opcode::True => self.push(Value::Boolean(true)), // i guess this explains why other rlox implementations do Value::True, Value::False ;3
                 Opcode::False => self.push(Value::Boolean(false)),
                 Opcode::Add => {
+                    println!("before popping into ADD, stack is: \n >> {:?}\n\n", self.stack);
+
                     self.binary_operation_store(|a, b| {
                         if a.is_string() || b.is_string() {
                             return Some(Value::String(format!(
@@ -216,6 +231,9 @@ impl VM {
                                 b.to_string()
                             )));
                         }
+
+                        println!("A>>> {:?}", a);
+                        println!("B>>> {:?}", b);
 
                         Some(Value::Number(a.to_num().unwrap() + b.to_num().unwrap()))
                     });
@@ -263,14 +281,16 @@ impl VM {
                     });
                 }
                 Opcode::Pop => {
-                    println!("popped {:?} off the stack", self.pop());
+                    println!("directPOP {:?} off the stack", self.pop());
                 }
                 Opcode::DefineGlobal => {
                     let name = self.read_constant()?.as_string().unwrap();
                     //println!("DefineGlobal read_constant as_string: {}", name);
                     self.globals
-                        .insert(name, self.stack.last().unwrap().clone());
+                        .insert(name.clone(), self.stack.last().unwrap().clone());
                     self.pop();
+
+                    println!("!! after DefineGlobal {} and popping, the stack is:\n{:?}\n", name, self.stack);
                 }
                 Opcode::GetGlobal => {
                     let name = self.read_constant()?.as_string().unwrap();
@@ -321,6 +341,9 @@ impl VM {
                     println!("argc: {};; stack: {:?}", argc, self.stack);
                     // missing?? function on stack
                     self.callValue(self.peek((argc) as usize).unwrap().clone(), argc);
+
+                    // println!("popped frame after Opcode::Call: {:.10}", format!("{:?}", self.frames.pop())); // this ain't right, we're popping straight after the call before we give the fn a chance to run
+
                 }
             }
         }
@@ -334,10 +357,11 @@ impl VM {
                 // call(ObjFunction* function, int argCount) 
                 // create callframe, load it with the function, set the ip to chunk.code
                 // frame->slots = vm.stackTop - argCount - 1;
+                println!("calling {}", lf.name);
                 let ip = lf.chunk.instr.len();
                 let mut frame = CallFrame::new(lf);
                 frame.ip = 0;
-                // TODO: slots??
+                frame.stack_start = self.stack.len() - (argc + 1) as usize;
 
                 self.frames.push(frame);
             },
@@ -348,8 +372,8 @@ impl VM {
     }
 
     fn peek(&self, offset: usize) -> Option<&Value> {
-        println!("{} - 1 - {}", self.stack.len(), offset);
-        println!("peeking offset {}={}", offset, self.stack.len() - 1 - offset);
+        //println!("{} - 1 - {}", self.stack.len(), offset);
+        //println!("peeking offset {}={}", offset, self.stack.len() - 1 - offset);
         if offset > self.stack.len() {
             return None;
         }

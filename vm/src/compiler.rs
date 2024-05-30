@@ -138,7 +138,6 @@ impl ExprVisitor<Result<(), String>> for Compiler {
             _ => {
                 // dirty hack to transform interpreter::Object to vm::Value
 
-
                 let offset = self.function.chunk.emit_const_value(match &value {
                     Object::Number(n) => Value::Number(n.clone()),
                     Object::String(s) => Value::String(s.clone()),
@@ -213,7 +212,6 @@ impl ExprVisitor<Result<(), String>> for Compiler {
     }
 
     fn visit_variable(&mut self, expr: Expr, name: &TokenLoc) -> Result<(), String> {
-
         if let Some(slot) = self.resolve_local(self.current_scope, &name.token.as_string().unwrap()) {
             self.function.chunk.emit(Opcode::GetLocal.into());
             self.function.chunk.emit(slot);
@@ -226,8 +224,6 @@ impl ExprVisitor<Result<(), String>> for Compiler {
                 }
             }
         }
-
-
 
         return Err(format!("Unknown variable name {}", name.token.as_string().unwrap()));
     }
@@ -294,7 +290,6 @@ impl StmtVisitor for Compiler {
         
         condition.visit(self);
 
-        
 
         let then_jmp = self.function.chunk.emit_jump(Opcode::JumpIfFalse.into());
         self.function.chunk.emit(Opcode::Pop.into());
@@ -327,14 +322,14 @@ impl StmtVisitor for Compiler {
     }
 
     fn visit_return(&mut self, keyword: &TokenLoc, value: &Box<Expr>) -> Option<Object> {
-        unimplemented!()
+        value.visit(self);
+        self.function.chunk.emit(Opcode::Return.into());
+
+        None
     }
 
     fn visit_var(&mut self, name: &TokenLoc, initializer: &Option<Box<Expr>>) -> Option<Object> {
-
         if self.current_scope == 0 {
-            
-
             /*
             Global variables are looked up by name at runtime. That means the VM—the
             bytecode interpreter loop—needs access to the name. A whole string is too big

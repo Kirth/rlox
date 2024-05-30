@@ -12,13 +12,7 @@ use crate::chunk::*;
 
 fn main() {
     let mut vm = VM::new();
-    let res = vm.interpret("fun b() { print \"B??\"; } fun a() { print \"A!!\"; } a();");
-
-    /*
-        TODO: move the compile method to the VM
-        push the resulting LoxFunction to the stack,
-        wrap that LoxFunction in a callframe and push to the framestack
-    */
+    let res = vm.interpret("fun a() { print \"huwwo\"; return 3; }\n a(); var v = a(); print v; print v + v;");
 
     println!("{:?}", vm);
     println!("{:?}", res);
