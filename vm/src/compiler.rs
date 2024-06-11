@@ -1,4 +1,7 @@
 
+use std::borrow::BorrowMut;
+use std::thread::scope;
+
 use interpreter::interpreter::{ExprVisitor, StmtVisitor, Object}; /// AAA, ExprVisitor and StmtVisitor expect and Interpreter Object!!!
 use interpreter::scanner::{self, *};
 use interpreter::parser::*;
@@ -10,15 +13,62 @@ type Value = crate::value::Object;
 
 #[derive(Debug)]
 pub struct Compiler {
-    pub function: LoxFunctionBuilder, // the current function
+    state: Vec<CompilerState>,
+}
+
+// here follows a long list of wrapper functions that exposes methods for internal compiler state on the current compiler
+// so that I don't have to think too much about changing the underlying implementation
+impl Compiler {
+    pub fn new() -> Self { 
+        let state = CompilerState { function: LoxFunctionBuilder::new("root".to_string()), current_scope: 0 };
+        
+        Compiler {
+            state: vec![state]
+        }
+    }    
+    
+    pub fn begin_function(&mut self, name: String, current_scope: usize) -> &mut CompilerState { 
+        self.state.push(CompilerState { function: LoxFunctionBuilder::new(name), current_scope: current_scope });
+        self.state.last_mut().expect("compiler state creation not to fail")
+    }
+
+    pub fn function(&mut self) -> &mut LoxFunctionBuilder {
+        self.state.last_mut().expect("states not to be empty").function.borrow_mut()
+    }
+
+    pub fn current_scope(&self) -> usize {
+        self.state.last().expect("states not to be empty").current_scope
+    }
+
+    pub fn end_function(&mut self) -> LoxFunction {
+        self.function().chunk.emit(Opcode::Return.into());
+        return self.state.pop().expect("state not to be empty").function.build()
+    }
+
+    pub fn resolve_local(&self, scope_depth: usize, name: &str) -> Option<u8> {
+        self.state.last().expect("states to not be empty").resolve_local(scope_depth, name)
+    }
+
+    fn begin_scope(&mut self) {
+        self.state.last_mut().expect("states not to be empty").begin_scope()
+    }
+
+    fn end_scope(&mut self) {
+        self.state.last_mut().expect("states not to be empty").end_scope()
+    }
+
+    pub fn declare_variable(&mut self, name: String) -> Result<(), String> {
+        self.state.last_mut().expect("states to not be empty").declare_variable(name)
+    }
+}
+
+#[derive(Debug)]
+struct CompilerState {
+    function: LoxFunctionBuilder, // TODO: cwbriones has Locals in the CompilerSTate, not the builder?
     current_scope: usize,
 }
 
-impl Compiler {
-    pub fn new() -> Self { Compiler { function: LoxFunctionBuilder::new("root".to_string()), current_scope: 0 }}
-
-    pub fn new_inner(name: String, current_scope: usize) -> Self { Compiler { function: LoxFunctionBuilder::new(name), current_scope: current_scope }}
-
+impl CompilerState {
     fn begin_scope(&mut self) {
         self.current_scope += 1;
     }
@@ -35,7 +85,8 @@ impl Compiler {
     // resolve a (Name, ScopeDepth) tuple to a slot on the stack
     fn resolve_local(&self, scope_depth: usize, name: &str) -> Option<u8> {
         for (i, l) in self.function.locals.iter().enumerate().rev() {
-            if &l.0 == name && l.1 == scope_depth {
+            println!("slot {:?}: {:?}\tmatch? {}", i, l, &l.0 == name && l.1 == scope_depth);
+            if &l.0 == name /*&& l.1 == scope_depth */ { // resolveLocal does not explicitly check scope depth, it goes highest to lowest to find the most local and thus support shadowing
                 return Some(i as u8);
             }
         }
@@ -43,24 +94,65 @@ impl Compiler {
         return None;
     }
 
-    pub fn end_compiler(mut self) -> LoxFunction {
-        self.function.chunk.emit(Opcode::Return.into());
-        return self.function.build()
+    // vm pops value from the stack and pushes it either into its global dict, 
+    // in clox parseVariable+declareVariable are separate/different from namedVariable
+    pub fn declare_variable(&mut self, name: String) -> Result<(), String> {
+        //println!(">> declare_variable for {} at depth {}", name, self.current_scope);
+        // globals go in to the vm's globals dictionary
+        if self.current_scope == 0 {
+            /*
+            Global variables are looked up by name at runtime. That means the VM—the
+            bytecode interpreter loop—needs access to the name. A whole string is too big
+            to stuff into the bytecode stream as an operand. Instead, we store the string in
+            the constant table and the instruction then refers to the name by its index in the table.
+            */
+
+            let idx = self.function.chunk.emit_const_value(Value::String(name));
+            //println!("Emitted name {} to idx {}", name.token.as_string().unwrap(), idx);
+
+            self.function.chunk.emit(Opcode::DefineGlobal.into());
+            self.function.chunk.emit(idx);
+
+            return Ok(());
+        } 
+
+        println!("declare_variable, populating locals with {}, {}", name, self.current_scope);
+        for (i, l) in self.function.locals.iter().enumerate().rev() {
+
+            if &l.0 == &name && l.1 == self.current_scope {
+                panic!("variable {} already present in scope {}", name, self.current_scope);
+            }
+        }
+
+        // addLocal:
+        // BUG: these are always pushed to the `current` compiler
+        // even in child invocations like in visit_function.
+        // because we don't have a stack of compilers like CInterpr
+        self.function.locals.push((name.clone(), self.current_scope));
+        //println!("addLocal for {} in {}: FunctionBuilder->Locals pushed to is: {:?}", name, self.current_scope, self.function);
+
+        self.function.chunk.emit(Opcode::SetLocal.into());
+        self.function.chunk.emit((self.function.locals.len() - 1) as u8); // the local's fixed stack slot
+        // this gets cleaned up because the stack always grows with the callframes' invocations
+
+
+        return Ok(());
     }
 }
 
 impl ExprVisitor<Result<(), String>> for Compiler {
     fn visit_assign(&mut self, expr: Expr, name: &TokenLoc, value: &Expr) -> Result<(), String> {
-        for (i, c) in self.function.chunk.constants.iter().enumerate() {
+        for (i, c) in self.function().chunk.constants.iter().enumerate() {
             if c.is_string() && c.as_string() == name.token.as_string() {
                 println!("RE-ASSIGNING {:?}", name);
                 value.visit(self).unwrap();
-                self.function.chunk.emit(Opcode::SetGlobal.into());
-                self.function.chunk.emit(i as u8);
+                self.function().chunk.emit(Opcode::SetGlobal.into());
+                self.function().chunk.emit(i as u8);
                 return Ok(())
             }
         }
-        println!("Unknown variable name {}", name.token.as_string().unwrap());
+        
+        panic!("Unknown variable name {}", name.token.as_string().unwrap());
         return Err(format!("Unknown variable name {}", name.token.as_string().unwrap()));
     }
 
@@ -69,14 +161,14 @@ impl ExprVisitor<Result<(), String>> for Compiler {
         right.visit(self);
 
         match &op.token {
-            Token::PLUS => { self.function.chunk.emit(Opcode::Add.into()) },
-            Token::MINUS => { self.function.chunk.emit(Opcode::Subtract.into()) },
-            Token::STAR => { self.function.chunk.emit(Opcode::Multiply.into()) },
-            Token::SLASH => { self.function.chunk.emit(Opcode::Divide.into()) },
+            Token::PLUS => { self.function().chunk.emit(Opcode::Add.into()) },
+            Token::MINUS => { self.function().chunk.emit(Opcode::Subtract.into()) },
+            Token::STAR => { self.function().chunk.emit(Opcode::Multiply.into()) },
+            Token::SLASH => { self.function().chunk.emit(Opcode::Divide.into()) },
 
-            Token::EQ_EQ => { self.function.chunk.emit(Opcode::Equal.into()) },
-            Token::GT => { self.function.chunk.emit(Opcode::Greater.into()) },
-            Token::LS => { self.function.chunk.emit(Opcode::Less.into()) },
+            Token::EQ_EQ => { self.function().chunk.emit(Opcode::Equal.into()) },
+            Token::GT => { self.function().chunk.emit(Opcode::Greater.into()) },
+            Token::LS => { self.function().chunk.emit(Opcode::Less.into()) },
 
             _ => { eprintln!("Unknown binary operation {:?}", op); return Err(format!("Unknown binary operation {:?}", op)) }
         }
@@ -104,8 +196,8 @@ impl ExprVisitor<Result<(), String>> for Compiler {
             argc += 1;
         }
 
-        self.function.chunk.emit(Opcode::Call.into());
-        self.function.chunk.emit(argc);
+        self.function().chunk.emit(Opcode::Call.into());
+        self.function().chunk.emit(argc);
 
         Ok(())
     }
@@ -133,17 +225,16 @@ impl ExprVisitor<Result<(), String>> for Compiler {
         */
 
         match &value {
-            Object::Boolean(b) => if *b == true { self.function.chunk.emit(Opcode::True.into()) } else { self.function.chunk.emit(Opcode::False.into()) },
-            Object::Nil => self.function.chunk.emit(Opcode::Nil.into()),
+            Object::Boolean(b) => if *b == true { self.function().chunk.emit(Opcode::True.into()) } else { self.function().chunk.emit(Opcode::False.into()) },
+            Object::Nil => self.function().chunk.emit(Opcode::Nil.into()),
             _ => {
                 // dirty hack to transform interpreter::Object to vm::Value
-
-                let offset = self.function.chunk.emit_const_value(match &value {
+                let offset = self.function().chunk.emit_const_value(match &value {
                     Object::Number(n) => Value::Number(n.clone()),
                     Object::String(s) => Value::String(s.clone()),
                     e => panic!("interpreter-value value unknown to vm: {:?}", e)
                 });
-                self.function.chunk.emit_const(offset);
+                self.function().chunk.emit_const(offset);
             }
         }
 
@@ -156,21 +247,21 @@ impl ExprVisitor<Result<(), String>> for Compiler {
             Token::AND => {
                 // only evaluate the RHS if the LHS is true
                 left.visit(self);
-                let end = self.function.chunk.emit_jump(Opcode::JumpIfFalse.into());
-                self.function.chunk.emit(Opcode::Pop.into());
+                let end = self.function().chunk.emit_jump(Opcode::JumpIfFalse.into());
+                self.function().chunk.emit(Opcode::Pop.into());
                 right.visit(self);
                 
-                self.function.chunk.patch_jump(end);
+                self.function().chunk.patch_jump(end);
             },
             Token::OR => {
                 left.visit(self);
                 // if the LHS is truthy, we don't evaluate the right operand
-                let else_jmp = self.function.chunk.emit_jump(Opcode::JumpIfFalse.into());
-                let end_jmp = self.function.chunk.emit_jump(Opcode::Jump.into());
-                self.function.chunk.patch_jump(else_jmp); // if false -> jump over the jump that avoids RHS
-                self.function.chunk.emit(Opcode::Pop.into());
+                let else_jmp = self.function().chunk.emit_jump(Opcode::JumpIfFalse.into());
+                let end_jmp = self.function().chunk.emit_jump(Opcode::Jump.into());
+                self.function().chunk.patch_jump(else_jmp); // if false -> jump over the jump that avoids RHS
+                self.function().chunk.emit(Opcode::Pop.into());
                 right.visit(self);
-                self.function.chunk.patch_jump(end_jmp);
+                self.function().chunk.patch_jump(end_jmp);
 
             },
             _ => {
@@ -203,8 +294,8 @@ impl ExprVisitor<Result<(), String>> for Compiler {
         right.visit(self);
 
         match &op.token {
-            Token::MINUS => self.function.chunk.emit(Opcode::Negate.into()),
-            Token::BANG => self.function.chunk.emit(Opcode::Not.into()),
+            Token::MINUS => self.function().chunk.emit(Opcode::Negate.into()),
+            Token::BANG => self.function().chunk.emit(Opcode::Not.into()),
             e => return Err(format!("Uknown unary operator {:?}", op))
         }
 
@@ -212,19 +303,22 @@ impl ExprVisitor<Result<(), String>> for Compiler {
     }
 
     fn visit_variable(&mut self, expr: Expr, name: &TokenLoc) -> Result<(), String> {
-        if let Some(slot) = self.resolve_local(self.current_scope, &name.token.as_string().unwrap()) {
-            self.function.chunk.emit(Opcode::GetLocal.into());
-            self.function.chunk.emit(slot);
+        //println!("visit_variable at scope {} with compiler:{:?}\n\n", self.current_scope(), self);
+        if let Some(slot) = self.resolve_local(self.current_scope(), &name.token.as_string().unwrap()) {
+            self.function().chunk.emit(Opcode::GetLocal.into());
+            self.function().chunk.emit(slot);
+            return Ok(())
         } else {
-            for (i, c) in self.function.chunk.constants.iter().enumerate() {
+            for (i, c) in self.function().chunk.constants.iter().enumerate() {
                 if c.is_string() && c.as_string() == name.token.as_string() {
-                    self.function.chunk.emit(Opcode::GetGlobal.into());
-                    self.function.chunk.emit(i as u8);
+                    self.function().chunk.emit(Opcode::GetGlobal.into());
+                    self.function().chunk.emit(i as u8);
                     return Ok(())
                 }
             }
         }
 
+        panic!("Unknown variable name {}", name.token.as_string().unwrap());
         return Err(format!("Unknown variable name {}", name.token.as_string().unwrap()));
     }
 
@@ -233,7 +327,7 @@ impl ExprVisitor<Result<(), String>> for Compiler {
 impl StmtVisitor for Compiler {
     fn visit_expression(&mut self, expr: &Box<Expr>) -> Option<Object> {
         expr.visit(self);
-        self.function.chunk.emit(Opcode::Pop.into()); // discard the unused result from an expression such as `brunch = "quiche"; _eat(brunch)_` off the stack
+        self.function().chunk.emit(Opcode::Pop.into()); // discard the unused result from an expression such as `brunch = "quiche"; _eat(brunch)_` off the stack
         None
     }
 
@@ -265,18 +359,31 @@ impl StmtVisitor for Compiler {
             body: &Box<Stmt>,
         ) -> Option<Object> {
         
-        let mut compiler = Compiler::new_inner(name.token.as_string().unwrap(), self.current_scope);
+        self.begin_scope(); 
+        // TODO: figure out the scope depth
+        self.begin_function(name.token.as_string().unwrap(), self.current_scope());
 
-        body.visit(&mut compiler);
-        let fun = compiler.end_compiler();
+        
+
+        for param in params {
+            // uint8_t constant = parseVariable("Expect parameter name.");  // emit a constant
+            // defineVariable(constant); -> populate locals + emitBytes(DEFINE_GLOBAL, global)
+            self.declare_variable(param.token.as_string().unwrap());
+        }
+
+        body.visit(self);
+        let fun = self.end_function().clone();
         let name = fun.name.clone();
 
-        let idx1 = self.function.chunk.emit_const_value(Value::LoxFunction(fun));
-        self.function.chunk.emit_const(idx1);
+        let idx1 = self.function().chunk.emit_const_value(Value::LoxFunction(fun));
+        self.function().chunk.emit_const(idx1);
 
-        let idx2 = self.function.chunk.emit_const_value(Value::String(name));
-        self.function.chunk.emit(Opcode::DefineGlobal.into());
-        self.function.chunk.emit(idx2);
+        // push the FnObject to the stack
+        // TODO: this should not be a global but a variable like any other.
+        // in clox: `ObjFunction* function = endCompiler(); emitBytes(OP_CONSTANT, makeConstant(OBJ_VAL(function)));``
+        let idx2 = self.function().chunk.emit_const_value(Value::String(name));
+        self.function().chunk.emit(Opcode::DefineGlobal.into());
+        self.function().chunk.emit(idx2);
 
         None
     }
@@ -291,16 +398,16 @@ impl StmtVisitor for Compiler {
         condition.visit(self);
 
 
-        let then_jmp = self.function.chunk.emit_jump(Opcode::JumpIfFalse.into());
-        self.function.chunk.emit(Opcode::Pop.into());
+        let then_jmp = self.function().chunk.emit_jump(Opcode::JumpIfFalse.into());
+        self.function().chunk.emit(Opcode::Pop.into());
         if_stmt.visit(self);
 
 
-        let else_jmp = self.function.chunk.emit_jump(Opcode::Jump.into());
+        let else_jmp = self.function().chunk.emit_jump(Opcode::Jump.into());
         
         // we jump over the previously emitted else JMP instruction
-        self.function.chunk.patch_jump(then_jmp);
-        self.function.chunk.emit(Opcode::Pop.into());
+        self.function().chunk.patch_jump(then_jmp);
+        self.function().chunk.emit(Opcode::Pop.into());
 
         if let Some(else_stmt) = else_stmt {
             else_stmt.visit(self);
@@ -308,7 +415,7 @@ impl StmtVisitor for Compiler {
 
         // we always need to patch; outside of the conditional because
         // that only controls how many prior instructions there are to jump over
-        self.function.chunk.patch_jump(else_jmp);
+        self.function().chunk.patch_jump(else_jmp);
         
 
         None
@@ -316,64 +423,40 @@ impl StmtVisitor for Compiler {
 
     fn visit_print(&mut self, expr: &Box<Expr>) -> Option<Object> {
         expr.visit(self);
-        self.function.chunk.emit(Opcode::Print.into());
+        self.function().chunk.emit(Opcode::Print.into());
 
         None
     }
 
     fn visit_return(&mut self, keyword: &TokenLoc, value: &Box<Expr>) -> Option<Object> {
         value.visit(self);
-        self.function.chunk.emit(Opcode::Return.into());
+        self.function().chunk.emit(Opcode::Return.into());
 
         None
     }
 
     fn visit_var(&mut self, name: &TokenLoc, initializer: &Option<Box<Expr>>) -> Option<Object> {
-        if self.current_scope == 0 {
-            /*
-            Global variables are looked up by name at runtime. That means the VM—the
-            bytecode interpreter loop—needs access to the name. A whole string is too big
-            to stuff into the bytecode stream as an operand. Instead, we store the string in
-            the constant table and the instruction then refers to the name by its index in the table.
-            */
-
-            let idx = self.function.chunk.emit_const_value(Value::String(name.token.as_string().unwrap()));
-            //println!("Emitted name {} to idx {}", name.token.as_string().unwrap(), idx);
-
-            match initializer {
-                Some(expr) => expr.visit(self).unwrap(),
-                None => self.function.chunk.emit(Opcode::Nil.into()),
-            }
-            
-            self.function.chunk.emit(Opcode::DefineGlobal.into());
-            self.function.chunk.emit(idx);
-        } else {
-            // locals go on the stack
-
-            match initializer {
-                Some(expr) => expr.visit(self).unwrap(),
-                None => self.function.chunk.emit(Opcode::Nil.into()),
-            }
-            self.function.locals.push((name.token.as_string().unwrap(), self.current_scope));
-
-            self.function.chunk.emit(Opcode::SetLocal.into());
-            self.function.chunk.emit((self.function.locals.len() - 1) as u8); // todo: this doesn't seem stable or sane
+        match initializer {
+            Some(expr) => expr.visit(self).unwrap(),
+            None => self.function().chunk.emit(Opcode::Nil.into()),
         }
+        
+        self.declare_variable(name.token.as_string().unwrap());
 
         None
     }
 
     fn visit_while(&mut self, condition: &Box<Expr>, body: &Box<Stmt>) -> Option<Object> {
-        let loop_start = self.function.chunk.instr.len(); // TODO: abstract?
+        let loop_start = self.function().chunk.instr.len(); // TODO: abstract?
         condition.visit(self);
 
-        let exit_jmp = self.function.chunk.emit_jump(Opcode::JumpIfFalse.into());
-        self.function.chunk.emit(Opcode::Pop.into());
+        let exit_jmp = self.function().chunk.emit_jump(Opcode::JumpIfFalse.into());
+        self.function().chunk.emit(Opcode::Pop.into());
         body.visit(self);
 
-        self.function.chunk.emit_loop(loop_start);
+        self.function().chunk.emit_loop(loop_start);
         
-        self.function.chunk.patch_jump(exit_jmp);
+        self.function().chunk.patch_jump(exit_jmp);
         
 
         None

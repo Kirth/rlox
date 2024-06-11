@@ -154,7 +154,6 @@ impl VM {
         let stmts = parser.parse().expect("parser to return statements");
         let mut compiler = Compiler::new();
 
-        println!("parsed code::\n{:?}\n\n", stmts);
 
         for stmt in stmts {
             stmt.visit(&mut compiler);
@@ -172,7 +171,7 @@ impl VM {
             => call(ObjFunction* function, int argCount) creates a new callframe and pushes this to the top.
         */
 
-        let fun = compiler.end_compiler();
+        let fun = compiler.end_function();
         self.push(Object::LoxFunction(fun));
         let callee = self.peek(0).unwrap().clone();
         println!("calling {:?}", callee);
@@ -201,7 +200,6 @@ impl VM {
                 Opcode::Return => {
                     //println!("pop: {:?}", self.pop());
                     let result = self.pop().unwrap();
-
                     //panic!("POPPED AND REPUSHING RESULT {}", result);
 
                     self.frames.pop();
@@ -285,12 +283,9 @@ impl VM {
                 }
                 Opcode::DefineGlobal => {
                     let name = self.read_constant()?.as_string().unwrap();
+                    let value = self.pop().unwrap();
                     //println!("DefineGlobal read_constant as_string: {}", name);
-                    self.globals
-                        .insert(name.clone(), self.stack.last().unwrap().clone());
-                    self.pop();
-
-                    println!("!! after DefineGlobal {} and popping, the stack is:\n{:?}\n", name, self.stack);
+                    self.globals.insert(name.clone(), value);
                 }
                 Opcode::GetGlobal => {
                     let name = self.read_constant()?.as_string().unwrap();

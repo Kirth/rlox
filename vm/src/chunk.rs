@@ -87,7 +87,7 @@ impl Chunk {
         self.emit(offset as u8);
     }
 
-    pub fn dissasemble_instruction(&self, offset: usize) {
+    pub fn dissasemble_instruction(&self, offset: usize) { // the chunk doesn't know enough about the environment for this but in debug.c we only look at the constant offsets and not the values
         let op = Opcode::try_from(self.instr[offset]).unwrap();
 
         print!("| {:04}: {:?}", offset, op);
@@ -99,14 +99,14 @@ impl Chunk {
 
                 print!("({:02}): {:?}", idx, value);
             }
-            /* Opcode::Add | Opcode::Divide | Opcode::Multiply | Opcode::Subtract => {
+            /*Opcode::Add | Opcode::Divide | Opcode::Multiply | Opcode::Subtract => {
                 let idx_a = self.instr[offset + 1];
                 let value_a = &self.constants[idx_a as usize];
                 let idx_b = self.instr[offset + 2];
                 let value_b = &self.constants[idx_b as usize];
 
                 print!("({:02}): {:?}, ({:02}): {:?}", idx_a, value_a, idx_b, value_b);
-            } */
+            }  */
             _ => {},
         }
 
