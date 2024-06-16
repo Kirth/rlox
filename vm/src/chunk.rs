@@ -6,11 +6,17 @@ type Value = Object;
 
 // in clox, this gets stored as an Object in the constants(?)
 // TODO: how can I align this with LoxFunction?
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LoxFunction {  // todo: good new-wrapper to replace all these pub declarations
     pub arity: usize,  
     pub chunk: Chunk,
     pub name: String, // Option<String>?
+}
+
+impl std::fmt::Debug for LoxFunction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.name)
+    }
 }
 
 #[derive(Debug)]
@@ -96,8 +102,17 @@ impl Chunk {
             Opcode::Constant => {
                 let idx = self.instr[offset + 1];
                 let value = &self.constants[idx as usize];
-
                 print!("({:02}): {:?}", idx, value);
+            },
+            Opcode::GetGlobal | Opcode::SetGlobal | Opcode::DefineGlobal => {
+                let idx = self.instr[offset + 1];
+                let name = &self.constants[idx as usize].as_string().unwrap();
+                print!("({:02}): {}", idx, name);
+            },
+            Opcode::SetLocal | Opcode::GetLocal => {
+                let idx = self.instr[offset + 1];
+                
+                print!("({:02})", idx);
             }
             /*Opcode::Add | Opcode::Divide | Opcode::Multiply | Opcode::Subtract => {
                 let idx_a = self.instr[offset + 1];

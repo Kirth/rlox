@@ -174,8 +174,6 @@ impl VM {
         let fun = compiler.end_function();
         self.push(Object::LoxFunction(fun));
         let callee = self.peek(0).unwrap().clone();
-        println!("calling {:?}", callee);
-        println!("stack: {:?}", self.stack);
         self.callValue(callee, 0);
 
         return self.run();
@@ -198,11 +196,21 @@ impl VM {
 
             match instr {
                 Opcode::Return => {
-                    //println!("pop: {:?}", self.pop());
-                    let result = self.pop().unwrap();
-                    //panic!("POPPED AND REPUSHING RESULT {}", result);
 
-                    self.frames.pop();
+                    self.trace_stack();
+
+                    let result = self.pop().unwrap();
+                    let frame = self.frames.pop().unwrap();
+
+                    // BUG?  we pop the frame but the stack still contains the frame-related values.
+                    let stack_growth = self.stack.len() - frame.stack_start;
+                    println!("stack grew by {} (= {} - {}) values during call execution", stack_growth, self.stack.len(), frame.stack_start);
+
+                    for _ in 0 .. stack_growth {
+                        self.pop();
+                    }
+                    
+                    println!("===== returning result \x1b[1m{} from frame {:?}\x1b[0m\n", result, frame.function.name);
 
                     if self.frames.len() == 0 {
                         self.pop();
@@ -219,9 +227,7 @@ impl VM {
                 Opcode::True => self.push(Value::Boolean(true)), // i guess this explains why other rlox implementations do Value::True, Value::False ;3
                 Opcode::False => self.push(Value::Boolean(false)),
                 Opcode::Add => {
-                    println!("before popping into ADD, stack is: \n >> {:?}\n\n", self.stack);
-
-                    self.binary_operation_store(|a, b| {
+                        self.binary_operation_store(|a, b| {
                         if a.is_string() || b.is_string() {
                             return Some(Value::String(format!(
                                 "{}{}",
@@ -229,9 +235,6 @@ impl VM {
                                 b.to_string()
                             )));
                         }
-
-                        println!("A>>> {:?}", a);
-                        println!("B>>> {:?}", b);
 
                         Some(Value::Number(a.to_num().unwrap() + b.to_num().unwrap()))
                     });
@@ -279,7 +282,8 @@ impl VM {
                     });
                 }
                 Opcode::Pop => {
-                    println!("directPOP {:?} off the stack", self.pop());
+                    self.pop();
+                    //println!("directPOP {:?} off the stack", self.pop());
                 }
                 Opcode::DefineGlobal => {
                     let name = self.read_constant()?.as_string().unwrap();
@@ -306,19 +310,22 @@ impl VM {
                 }
                 Opcode::SetLocal => {
                     let slot = self.read_u8();
-                    self.stack[slot as usize] = self.stack.last().unwrap().clone();
+                    let value = self.peek(0).unwrap().clone();
+                    println!("SetLocal> slot {}={:?}", slot, value);
+                    let offset: usize = self.frame().stack_start + slot as usize + 1; // Slot 0 is the current fn?
+                    self.stack[offset] = value;
                     // todo: abstract this into `peek` already..
                 }
                 Opcode::GetLocal => {
                     let slot = self.read_u8();
-                    self.push(self.stack[slot as usize].clone());
+                    let offset = self.frame().stack_start + slot as usize + 1;
+                    self.push(self.stack[offset].clone());
                 }
                 Opcode::JumpIfFalse => {
                     let offset = self.read_short();
-                    println!("JUMP_IF_FALSE, top of stack {:?}", self.stack.last());
 
                     if self.stack.last().unwrap().is_falsey() {
-                        println!("jumping");
+                        println!("> jumping, stack top was falsey");
                         self.frame_mut().ip += offset as usize;
                     }
                 }
@@ -333,9 +340,10 @@ impl VM {
                 Opcode::Call => {
                     let argc = self.read_u8();
 
-                    println!("argc: {};; stack: {:?}", argc, self.stack);
+                    //println!("argc: {};; stack: {:?}", argc, self.stack);
                     // missing?? function on stack
                     self.callValue(self.peek((argc) as usize).unwrap().clone(), argc);
+                    self.trace_stack();
 
                     // println!("popped frame after Opcode::Call: {:.10}", format!("{:?}", self.frames.pop())); // this ain't right, we're popping straight after the call before we give the fn a chance to run
 
@@ -352,13 +360,15 @@ impl VM {
                 // call(ObjFunction* function, int argCount) 
                 // create callframe, load it with the function, set the ip to chunk.code
                 // frame->slots = vm.stackTop - argCount - 1;
-                println!("calling {}", lf.name);
+                println!("\n===== calling \x1b[1m{}\x1b[0m with {} args", lf.name, argc);
                 let ip = lf.chunk.instr.len();
                 let mut frame = CallFrame::new(lf);
                 frame.ip = 0;
                 frame.stack_start = self.stack.len() - (argc + 1) as usize;
 
                 self.frames.push(frame);
+
+                
             },
             e => { panic!("Can't call object {:?}", e) }
         }
@@ -384,6 +394,7 @@ impl VM {
     }
 
     fn push(&mut self, value: Value) {
+        println!("! push: {:?}", value);
         self.stack.push(value)
     }
 
@@ -395,8 +406,9 @@ impl VM {
     }
 
     fn trace_stack(&self) {
+        println!("current frame stack starts at idx {}", self.frame().stack_start);
         for (i, v) in self.stack.iter().enumerate() {
-            println!("[ {:?} ]", v);
+            println!("{}:\t [ {:?} ]", i, v);
         }
     }
 }

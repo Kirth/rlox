@@ -60,6 +60,10 @@ impl Compiler {
     pub fn declare_variable(&mut self, name: String) -> Result<(), String> {
         self.state.last_mut().expect("states to not be empty").declare_variable(name)
     }
+
+    pub fn add_local(&mut self, name: String, scope_depth: usize) {
+        self.state.last_mut().expect("states to not be empty").add_local(name, scope_depth)
+    }
 }
 
 #[derive(Debug)]
@@ -85,7 +89,6 @@ impl CompilerState {
     // resolve a (Name, ScopeDepth) tuple to a slot on the stack
     fn resolve_local(&self, scope_depth: usize, name: &str) -> Option<u8> {
         for (i, l) in self.function.locals.iter().enumerate().rev() {
-            println!("slot {:?}: {:?}\tmatch? {}", i, l, &l.0 == name && l.1 == scope_depth);
             if &l.0 == name /*&& l.1 == scope_depth */ { // resolveLocal does not explicitly check scope depth, it goes highest to lowest to find the most local and thus support shadowing
                 return Some(i as u8);
             }
@@ -116,7 +119,7 @@ impl CompilerState {
             return Ok(());
         } 
 
-        println!("declare_variable, populating locals with {}, {}", name, self.current_scope);
+        //println!("declare_variable, populating locals with {}, {}", name, self.current_scope);
         for (i, l) in self.function.locals.iter().enumerate().rev() {
 
             if &l.0 == &name && l.1 == self.current_scope {
@@ -124,12 +127,7 @@ impl CompilerState {
             }
         }
 
-        // addLocal:
-        // BUG: these are always pushed to the `current` compiler
-        // even in child invocations like in visit_function.
-        // because we don't have a stack of compilers like CInterpr
-        self.function.locals.push((name.clone(), self.current_scope));
-        //println!("addLocal for {} in {}: FunctionBuilder->Locals pushed to is: {:?}", name, self.current_scope, self.function);
+        self.add_local(name, self.current_scope);
 
         self.function.chunk.emit(Opcode::SetLocal.into());
         self.function.chunk.emit((self.function.locals.len() - 1) as u8); // the local's fixed stack slot
@@ -137,6 +135,10 @@ impl CompilerState {
 
 
         return Ok(());
+    }
+
+    fn add_local(&mut self, name: String, scope_depth: usize) {
+        self.function.locals.push((name.clone(), scope_depth));
     }
 }
 
@@ -310,12 +312,29 @@ impl ExprVisitor<Result<(), String>> for Compiler {
             return Ok(())
         } else {
             for (i, c) in self.function().chunk.constants.iter().enumerate() {
+                //println!("checking if {:?} is in globals: {},{}", name, i, c);
                 if c.is_string() && c.as_string() == name.token.as_string() {
                     self.function().chunk.emit(Opcode::GetGlobal.into());
                     self.function().chunk.emit(i as u8);
                     return Ok(())
                 }
+
+                // BUG 12.06.2024: this breaks when the global is defined in a previous Chunk,
+                // the current Chunk's const table then don't contain the variable name's string constant,
+                // by current logic that means we assume it don't exist.
+                // But only the VM knows which globals are there: order of invocation and execution is not compile time fixed.
+                // 
+
             }
+
+            // I still feel like I"m missing something and that checking whether the global exists should be possible.
+
+            //println!("compiler: variable {} name not found in const table, adding", name.token.as_string().unwrap());
+            let idx = self.function().chunk.emit_const_value(Value::String(name.token.as_string().unwrap()));
+            self.function().chunk.emit(Opcode::GetGlobal.into());
+            self.function().chunk.emit(idx);
+
+            return Ok(())
         }
 
         panic!("Unknown variable name {}", name.token.as_string().unwrap());
@@ -368,11 +387,12 @@ impl StmtVisitor for Compiler {
         for param in params {
             // uint8_t constant = parseVariable("Expect parameter name.");  // emit a constant
             // defineVariable(constant); -> populate locals + emitBytes(DEFINE_GLOBAL, global)
-            self.declare_variable(param.token.as_string().unwrap());
+            self.add_local(param.token.as_string().unwrap(), self.current_scope());
         }
 
         body.visit(self);
-        let fun = self.end_function().clone();
+        let fun = self.end_function().clone(); // we drop out of the fn's CompilerState
+
         let name = fun.name.clone();
 
         let idx1 = self.function().chunk.emit_const_value(Value::LoxFunction(fun));
