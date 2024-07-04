@@ -3,6 +3,11 @@ use crate::vm::Opcode;
 
 type Value = Object;
 
+#[derive(Clone, Debug)]
+pub struct Upvalue {
+    pub is_local: bool,
+    pub index: u8,
+}
 
 // in clox, this gets stored as an Object in the constants(?)
 // TODO: how can I align this with LoxFunction?
@@ -25,16 +30,30 @@ pub struct LoxFunctionBuilder {
     pub locals: Vec<(String, usize)>, // todo: ??
     pub arity: usize,
     pub name: String, 
+    pub upvalues: Vec<Upvalue>,
 }
 
 impl LoxFunctionBuilder {
-    pub fn new(name: String) -> Self { LoxFunctionBuilder { chunk: Chunk::new(), locals: Vec::new(), arity: 0, name: name} }
+    pub fn new(name: String) -> Self { LoxFunctionBuilder { chunk: Chunk::new(), locals: Vec::new(), arity: 0, name: name, upvalues: Vec::new() } }
 
     pub fn build(self) -> LoxFunction {
         LoxFunction {
             arity: self.arity,
             chunk: self.chunk,
             name: self.name,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Closure {
+    pub function: LoxFunction,
+}
+
+impl Closure {
+    pub fn new(function: LoxFunction) -> Self {
+        Closure {
+            function: function
         }
     }
 }

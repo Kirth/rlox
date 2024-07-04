@@ -1,4 +1,4 @@
-use crate::LoxFunction;
+use crate::{Closure,LoxFunction};
 
 #[derive(Debug, Clone)]
 pub enum Object {
@@ -6,6 +6,7 @@ pub enum Object {
     Number(f64),
     Boolean(bool),
     LoxFunction(LoxFunction), 
+    Closure(Closure),
     //Class(LoxClass),
     //Instance(LoxInstance),
     Nil,
@@ -63,6 +64,13 @@ impl Object {
         }
     }
 
+    pub fn as_function(&self) -> Option<LoxFunction> {
+        if let Object::LoxFunction(lf) = self {
+            return Some(lf.clone());
+        }
+
+        return None;
+    }
 }
 
 impl PartialEq for Object {
@@ -88,7 +96,8 @@ impl std::fmt::Display for Object {
             Object::Number(n) => write!(f, "{}", n),
             Object::Boolean(b) => write!(f, "{}", b),
             Object::Nil => write!(f, "nil"),
-            Object::LoxFunction(lf) => write!(f, "LF:{}", lf.name)
+            Object::LoxFunction(lf) => write!(f, "LF:{}", lf.name),
+            Object::Closure(c) => write!(f, "Closure:{}", c.function.name),
         }
     }
 }

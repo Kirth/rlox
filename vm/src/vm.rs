@@ -37,25 +37,28 @@ pub enum Opcode {
     GetGlobal,
     SetLocal,
     GetLocal,
+    SetUpvalue,
+    GetUpvalue,
 
     JumpIfFalse,
     Jump,
     Loop, // unconditionally jumps backwards by a given offset
     
     Call,
+    Closure,
 }
 
 #[derive(Debug)]
 pub struct CallFrame {
-    pub function: LoxFunction, // TODO: this should be a pointer (for looking up constants)
+    pub closure: Closure, // TODO: this should be a pointer (for looking up constants)
     pub ip: usize,
     pub stack_start: usize, // rather than slots
 }
 
 impl CallFrame {
-    pub fn new(fun: LoxFunction) -> Self {
+    pub fn new(closure: Closure) -> Self {
         CallFrame {
-            function: fun,
+            closure: closure,
             ip: 0,
             stack_start: 0,
         }
@@ -98,7 +101,7 @@ impl VM {
     fn read_u8(&mut self) -> u8 {
         let frame = self.frame_mut();
 
-        let byte = frame.function.chunk.instr[frame.ip];
+        let byte = frame.closure.function.chunk.instr[frame.ip];
         frame.ip += 1;
 
         return byte;
@@ -117,8 +120,8 @@ impl VM {
         let frame = self.frame_mut();
         frame.ip += 2;
 
-        let high = (frame.function.chunk.instr[frame.ip - 2] as u16) << 8;
-        let low = frame.function.chunk.instr[frame.ip - 1] as u16;
+        let high = (frame.closure.function.chunk.instr[frame.ip - 2] as u16) << 8;
+        let low = frame.closure.function.chunk.instr[frame.ip - 1] as u16;
 
         return high | low;
     }
@@ -172,7 +175,7 @@ impl VM {
         */
 
         let fun = compiler.end_function();
-        self.push(Object::LoxFunction(fun));
+        self.push(Object::Closure(Closure::new(fun)));
         let callee = self.peek(0).unwrap().clone();
         self.callValue(callee, 0);
 
@@ -187,30 +190,36 @@ impl VM {
 
         // end-interpret;
         while true {
-            self.frame()
-                .function
-                .chunk
-                .dissasemble_instruction(self.frame().ip); // TODO: frame.ip is not correctly calculated?
+            if cfg!(feature = "debug_output") {
+                self.frame()
+                    .closure
+                    .function
+                    .chunk
+                    .dissasemble_instruction(self.frame().ip);
+            }
 
             let instr = self.read_opcode()?;
 
             match instr {
                 Opcode::Return => {
 
-                    self.trace_stack();
-
                     let result = self.pop().unwrap();
                     let frame = self.frames.pop().unwrap();
 
                     // BUG?  we pop the frame but the stack still contains the frame-related values.
                     let stack_growth = self.stack.len() - frame.stack_start;
-                    println!("stack grew by {} (= {} - {}) values during call execution", stack_growth, self.stack.len(), frame.stack_start);
+
+                    if cfg!(feature = "debug_output") {
+                        println!("stack grew by {} (= {} - {}) values during call execution", stack_growth, self.stack.len(), frame.stack_start);
+                    }
 
                     for _ in 0 .. stack_growth {
                         self.pop();
                     }
                     
-                    println!("===== returning result \x1b[1m{} from frame {:?}\x1b[0m\n", result, frame.function.name);
+                    if cfg!(feature = "debug_output") {
+                        println!("===== returning result \x1b[1m{} from frame {:?}\x1b[0m\n", result, frame.closure.function.name);
+                    }
 
                     if self.frames.len() == 0 {
                         self.pop();
@@ -293,6 +302,7 @@ impl VM {
                 }
                 Opcode::GetGlobal => {
                     let name = self.read_constant()?.as_string().unwrap();
+                    println!("{:?}", self.globals);
                     self.push(self.globals.get(&name).unwrap().clone());
                 }
                 Opcode::SetGlobal => {
@@ -311,7 +321,6 @@ impl VM {
                 Opcode::SetLocal => {
                     let slot = self.read_u8();
                     let value = self.peek(0).unwrap().clone();
-                    println!("SetLocal> slot {}={:?}", slot, value);
                     let offset: usize = self.frame().stack_start + slot as usize + 1; // Slot 0 is the current fn?
                     self.stack[offset] = value;
                     // todo: abstract this into `peek` already..
@@ -325,7 +334,9 @@ impl VM {
                     let offset = self.read_short();
 
                     if self.stack.last().unwrap().is_falsey() {
-                        println!("> jumping, stack top was falsey");
+                        if cfg!(feature = "debug_output") {
+                            println!("> jumping, stack top was falsey");
+                        }
                         self.frame_mut().ip += offset as usize;
                     }
                 }
@@ -343,11 +354,17 @@ impl VM {
                     //println!("argc: {};; stack: {:?}", argc, self.stack);
                     // missing?? function on stack
                     self.callValue(self.peek((argc) as usize).unwrap().clone(), argc);
-                    self.trace_stack();
+                    //self.trace_stack();
 
                     // println!("popped frame after Opcode::Call: {:.10}", format!("{:?}", self.frames.pop())); // this ain't right, we're popping straight after the call before we give the fn a chance to run
-
                 }
+                Opcode::Closure => {
+                    let fun = self.read_constant().unwrap().as_function().unwrap();
+                    let closure = Closure::new(fun);
+                    self.push(Object::Closure(closure));
+                }
+                Opcode::GetUpvalue => unimplemented!(),
+                Opcode::SetUpvalue => unimplemented!(),
             }
         }
 
@@ -356,11 +373,14 @@ impl VM {
 
     fn callValue(&mut self, callee: Value, argc: u8) -> bool {
         match callee {
+            /*
             Value::LoxFunction(lf) => {
                 // call(ObjFunction* function, int argCount) 
                 // create callframe, load it with the function, set the ip to chunk.code
                 // frame->slots = vm.stackTop - argCount - 1;
-                println!("\n===== calling \x1b[1m{}\x1b[0m with {} args", lf.name, argc);
+                if cfg!(feature = "debug_output") {
+                    println!("\n===== calling \x1b[1m{}\x1b[0m with {} args", lf.name, argc);
+                }
                 let ip = lf.chunk.instr.len();
                 let mut frame = CallFrame::new(lf);
                 frame.ip = 0;
@@ -369,7 +389,18 @@ impl VM {
                 self.frames.push(frame);
 
                 
-            },
+            }, */
+            Value::Closure(c) => {
+                if cfg!(feature = "debug_output") {
+                    println!("\n===== calling \x1b[1m{}\x1b[0m with {} args", c.function.name, argc);
+                }
+                let ip = c.function.chunk.instr.len();
+                let mut frame = CallFrame::new(c);
+                frame.ip = 0;
+                frame.stack_start = self.stack.len() - (argc + 1) as usize;
+
+                self.frames.push(frame);
+            }
             e => { panic!("Can't call object {:?}", e) }
         }
 
@@ -388,20 +419,25 @@ impl VM {
 
     fn read_constant(&mut self) -> Result<Value, InterpretError> {
         let idx = self.read_u8();
-        let constant = self.frame().function.chunk.constants[idx as usize].clone();
+        let constant = self.frame().closure.function.chunk.constants[idx as usize].clone();
 
         Ok(constant)
     }
 
     fn push(&mut self, value: Value) {
-        println!("! push: {:?}", value);
+        if cfg!(feature = "debug_output") {
+            println!("! push: {:?}", value);
+        }
+
         self.stack.push(value)
     }
 
     fn pop(&mut self) -> Option<Value> {
         let p = self.stack.pop();
-        println!("? popd {:?}", p);
-        //self.stack.pop()
+        if cfg!(feature = "debug_output") {
+            println!("? popd {:?}", p);
+        }
+
         p
     }
 

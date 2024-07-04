@@ -46,7 +46,47 @@ impl Compiler {
     }
 
     pub fn resolve_local(&self, scope_depth: usize, name: &str) -> Option<u8> {
-        self.state.last().expect("states to not be empty").resolve_local(scope_depth, name)
+        self.state.last().expect("states to not be empty").resolve_local(name)
+    }
+
+    pub fn resolve_upvalue(&self, offset_back: usize, name: &str) -> Option<u8> {
+        // TODO: handle there not being a parent
+
+        let local = self.state.get(self.state.len() - offset_back).unwrap().resolve_local(name);
+
+        if local.is_some() {
+            return self.add_upvalue(offset_back, local.unwrap(), true);
+        }
+
+        return None;
+
+
+        //self.state.last().expect("states to not be empty").resolve_upvalue(scope_depth, name)
+    }
+
+    // You were HERE:  splitting off add_value into the Compiler so that resolve_upvalue can be recursively called
+    // both resolve_upvalue and add_value are responsible for attaching the upvalues to the right function''s chunk.
+
+    // I have left this function a bit of a mess but trust I can work myself out of it :)
+    fn add_upvalue(&mut self, offset_back: usize, index: u8, is_local: bool) -> Option<u8> {
+        let state_idx = self.state.len() - offset_back;
+
+        let mut state =  self.state.get_mut(state_idx).unwrap();
+
+        let upvalue = state.function.upvalues.iter().enumerate().
+                    find(|(_, up)| up.is_local && up.index == index).or_else(|| {
+                        let u = crate::chunk::Upvalue {
+                            is_local: true,
+                            index: index
+                        };
+
+                        state.function.upvalues.push(u.clone());
+
+                        Some((state.function.upvalues.len() - 1, u))
+                    });
+
+
+        return Some(upvalue.unwrap().0 as u8);
     }
 
     fn begin_scope(&mut self) {
@@ -87,7 +127,8 @@ impl CompilerState {
     }
 
     // resolve a (Name, ScopeDepth) tuple to a slot on the stack
-    fn resolve_local(&self, scope_depth: usize, name: &str) -> Option<u8> {
+    fn resolve_local(&self, name: &str) -> Option<u8> {
+        println!("resolving local {} inside of locals: {:?}", name, self.function.locals);
         for (i, l) in self.function.locals.iter().enumerate().rev() {
             if &l.0 == name /*&& l.1 == scope_depth */ { // resolveLocal does not explicitly check scope depth, it goes highest to lowest to find the most local and thus support shadowing
                 return Some(i as u8);
@@ -100,7 +141,6 @@ impl CompilerState {
     // vm pops value from the stack and pushes it either into its global dict, 
     // in clox parseVariable+declareVariable are separate/different from namedVariable
     pub fn declare_variable(&mut self, name: String) -> Result<(), String> {
-        //println!(">> declare_variable for {} at depth {}", name, self.current_scope);
         // globals go in to the vm's globals dictionary
         if self.current_scope == 0 {
             /*
@@ -119,9 +159,15 @@ impl CompilerState {
             return Ok(());
         } 
 
+        /* uh- oh.. this may have to somehow leak up into the Compiler..
+        if let Some(upvalue) = self.resolve_upvalue(self.current_scope, &name) {
+            self.function.chunk.emit(Opcode::SetUpvalue.into());
+            self.function.chunk.emit(upvalue);
+            return Ok(())
+        }*/ 
+
         //println!("declare_variable, populating locals with {}, {}", name, self.current_scope);
         for (i, l) in self.function.locals.iter().enumerate().rev() {
-
             if &l.0 == &name && l.1 == self.current_scope {
                 panic!("variable {} already present in scope {}", name, self.current_scope);
             }
@@ -310,6 +356,22 @@ impl ExprVisitor<Result<(), String>> for Compiler {
             self.function().chunk.emit(Opcode::GetLocal.into());
             self.function().chunk.emit(slot);
             return Ok(())
+        } else if let Some(slot) = self.resolve_upvalue(1, &name.token.as_string().unwrap()) {
+            // !! in CLOX: addUpvalue is a part of resolveUpvalue, here we separate those concerns
+            // they actually do that because resolveUpvalue is called recursively.
+
+
+           
+
+            // we need recursion because if we don't find it in the enclosing compilerstate
+            // we need to go one level up and check there.
+            
+            // ==== addUpvalue
+
+            self.function().chunk.emit(Opcode::GetUpvalue.into());
+            let upvalue = self.function().upvalues.len() as u8;
+            self.function().chunk.emit(upvalue);
+            return Ok(())
         } else {
             for (i, c) in self.function().chunk.constants.iter().enumerate() {
                 //println!("checking if {:?} is in globals: {},{}", name, i, c);
@@ -393,17 +455,17 @@ impl StmtVisitor for Compiler {
         body.visit(self);
         let fun = self.end_function().clone(); // we drop out of the fn's CompilerState
 
+
+
         let name = fun.name.clone();
 
         let idx1 = self.function().chunk.emit_const_value(Value::LoxFunction(fun));
-        self.function().chunk.emit_const(idx1);
+        self.function().chunk.emit(Opcode::Closure.into());
+        self.function().chunk.emit(idx1);
 
-        // push the FnObject to the stack
-        // TODO: this should not be a global but a variable like any other.
-        // in clox: `ObjFunction* function = endCompiler(); emitBytes(OP_CONSTANT, makeConstant(OBJ_VAL(function)));``
-        let idx2 = self.function().chunk.emit_const_value(Value::String(name));
-        self.function().chunk.emit(Opcode::DefineGlobal.into());
-        self.function().chunk.emit(idx2);
+
+        self.end_scope();
+        self.declare_variable(name);
 
         None
     }
@@ -482,3 +544,4 @@ impl StmtVisitor for Compiler {
         None
     }
 }
+
